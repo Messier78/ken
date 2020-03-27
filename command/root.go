@@ -24,7 +24,7 @@ func Execute() {
 func init() {
 	rootCmd.AddCommand(
 		server.NewCommand(),
-		config.NewConfigCommand(),
+		config.NewCommand(),
 		newVersionCommand(),
 	)
 }

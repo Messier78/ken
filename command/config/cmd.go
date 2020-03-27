@@ -5,7 +5,7 @@ import "github.com/spf13/cobra"
 type options struct {
 }
 
-func NewConfigCommand() *cobra.Command {
+func NewCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "config",
 		Short: "Manage Config",

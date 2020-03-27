@@ -16,7 +16,7 @@ import (
 
 var (
 	logsLevel   sync.Map
-	logs        orb.Set
+	logs        = orb.NewSet()
 	once        sync.Once
 	hookNormal  *lumberjack.Logger
 	encoderConf *zapcore.EncoderConfig
