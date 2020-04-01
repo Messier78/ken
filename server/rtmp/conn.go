@@ -1,0 +1,763 @@
+package rtmp
+
+import (
+	"bufio"
+	"bytes"
+	"encoding/binary"
+	"errors"
+	"io"
+	"net"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"ken/server/amf"
+)
+
+type Conn interface {
+	Close()
+	Send(msg *Message) error
+	CreateChunkStream(id uint32) (*OutboundChunkStream, error)
+	CloseChunkStream(id uint32)
+	NewTransactionID() uint32
+	CreateMediaChunkStream() (*OutboundChunkStream, error)
+	CloseMediaChunkStream(id uint32)
+	SetStreamBufferSize(streamID uint32, size uint32)
+	OutboundChunkStream(id uint32) (cs *OutboundChunkStream, found bool)
+	InboundChunkStream(id uint32) (cs *InboundChunkStream, found bool)
+	SetWindowAcknowledgementSize()
+	SetPeerBandwidth(peerBandwidth uint32, limitType byte)
+	SetChunkSize(chunkSize uint32)
+	SendUserControlMessage(eventID uint16)
+}
+
+type ConnHandler interface {
+	OnReceived(conn Conn, msg *Message)
+	OnReceivedRtmpCommand(conn Conn, command *Command)
+	OnClosed(conn Conn)
+}
+
+type conn struct {
+	// streams
+	outChunkStreams sync.Map
+	inChunkStreams  sync.Map
+
+	// High-priority send message buffer
+	// Protocol control message are sent with highest priority
+	highPriorityMessageQueue  chan *Message
+	highPriorityMessage       *Message
+	highPriorityMessageOffset int
+
+	// Middle-priority send message buffer
+	middlePriorityMessageQueue  chan *Message
+	middlePriorityMessage       *Message
+	middlePriorityMessageOffset int
+
+	// Low-priority send message buffer
+	// video message is assigned the lowest priority
+	lowPriorityMessageQueue  chan *Message
+	lowPriorityMessage       *Message
+	lowPriorityMessageOffset int
+
+	// Chunk size
+	inChunkSize      uint32
+	outChunkSize     uint32
+	outChunkSizeTemp uint32
+
+	// Bytes counter (for window ack)
+	inBytes  uint32
+	outBytes uint32
+
+	// Previous window acknowledgement inbytes
+	inBytesPreWindow uint32
+
+	// Window size
+	inWindowSize  uint32
+	outWindowSize uint32
+
+	// Bandwidth
+	inBandwidth  uint32
+	outBandwidth uint32
+
+	// Bandwidth Limit
+	inBandwidthLimit  uint8
+	outBandwidthLimit uint8
+
+	// Media chunk stream ID
+	mediaChunkStreamIDAllocator       []bool
+	mediaChunkStreamIDAllocatorLocker sync.Mutex
+
+	closed  bool
+	handler ConnHandler
+	c       net.Conn
+	br      *bufio.Reader
+	bw      *bufio.Writer
+
+	lastTransactionID uint32
+	err               error
+}
+
+func NewConn(c net.Conn, br *bufio.Reader, bw *bufio.Writer, handler ConnHandler, maxChannelNumber int) Conn {
+	conn := &conn{
+		highPriorityMessageQueue:    make(chan *Message, DEFAULT_HIGH_PRIORITY_BUFFER_SIZE),
+		highPriorityMessage:         nil,
+		highPriorityMessageOffset:   0,
+		middlePriorityMessageQueue:  make(chan *Message, DEFAULT_MIDDLE_PRIORITY_BUFFER_SIZE),
+		middlePriorityMessage:       nil,
+		middlePriorityMessageOffset: 0,
+		lowPriorityMessageQueue:     make(chan *Message, DEFAULT_LOW_PRIORITY_BUFFER_SIZE),
+		lowPriorityMessage:          nil,
+		lowPriorityMessageOffset:    0,
+		inChunkSize:                 DEFAULT_CHUNK_SIZE,
+		outChunkSize:                DEFAULT_CHUNK_SIZE,
+		outChunkSizeTemp:            0,
+		inBytes:                     0,
+		outBytes:                    0,
+		inBytesPreWindow:            0,
+		inWindowSize:                DEFAULT_WINDOW_SIZE,
+		outWindowSize:               DEFAULT_WINDOW_SIZE,
+		inBandwidth:                 DEFAULT_WINDOW_SIZE,
+		outBandwidth:                DEFAULT_WINDOW_SIZE,
+		inBandwidthLimit:            BINDWIDTH_LIMIT_DYNAMIC,
+		outBandwidthLimit:           BINDWIDTH_LIMIT_DYNAMIC,
+		mediaChunkStreamIDAllocator: make([]bool, maxChannelNumber),
+		closed:                      false,
+		handler:                     handler,
+		c:                           c,
+		br:                          br,
+		bw:                          bw,
+		lastTransactionID:           0,
+		err:                         nil,
+	}
+
+	// Create Protocal control chunk stream
+	conn.outChunkStreams.Store(CS_ID_PROTOCOL_CONTROL, NewOutboundChunkStream(CS_ID_PROTOCOL_CONTROL))
+	// Create Command message chunk stream
+	conn.outChunkStreams.Store(CS_ID_COMMAND, NewOutboundChunkStream(CS_ID_COMMAND))
+	// Create User control chunk stream
+	conn.outChunkStreams.Store(CS_ID_USER_CONTROL, NewOutboundChunkStream(CS_ID_USER_CONTROL))
+	go conn.sendLoop()
+	go conn.recvLoop()
+
+	return conn
+}
+
+func (conn *conn) Close() {
+	conn.closed = true
+	conn.c.Close()
+}
+
+func (conn *conn) Send(msg *Message) error {
+	csiType := msg.ChunkStreamID % 6
+	if csiType == CS_ID_PROTOCOL_CONTROL || csiType == CS_ID_COMMAND {
+		conn.highPriorityMessageQueue <- msg
+		return nil
+	}
+	if msg.Type == VIDEO_TYPE {
+		conn.lowPriorityMessageQueue <- msg
+		return nil
+	}
+	conn.middlePriorityMessageQueue <- msg
+	return nil
+}
+
+func (conn *conn) CreateChunkStream(id uint32) (*OutboundChunkStream, error) {
+	var err error
+	v, found := conn.outChunkStreams.LoadOrStore(id, NewOutboundChunkStream(id))
+	if found {
+		return nil, errors.New("chunk stream existed")
+	}
+	cs, _ := v.(*OutboundChunkStream)
+	return cs, err
+}
+
+func (conn *conn) CloseChunkStream(id uint32) {
+	conn.outChunkStreams.Delete(id)
+}
+
+func (conn *conn) NewTransactionID() uint32 {
+	return atomic.AddUint32(&conn.lastTransactionID, 1)
+}
+
+func (conn *conn) CreateMediaChunkStream() (cs *OutboundChunkStream, err error) {
+	var csi uint32
+	conn.mediaChunkStreamIDAllocatorLocker.Lock()
+	for idx, v := range conn.mediaChunkStreamIDAllocator {
+		if !v {
+			csi = uint32((idx+1)*6 + 2)
+			conn.mediaChunkStreamIDAllocator[idx] = true
+			break
+		}
+	}
+	conn.mediaChunkStreamIDAllocatorLocker.Unlock()
+	if csi == 0 {
+		return nil, errors.New("No more chunk stream ID to allocate")
+	}
+	if cs, err = conn.CreateChunkStream(csi); err != nil {
+		conn.CloseMediaChunkStream(csi)
+		return nil, err
+	}
+	return
+}
+
+func (conn *conn) CloseMediaChunkStream(id uint32) {
+	idx := (id-2)/6 - 1
+	conn.mediaChunkStreamIDAllocatorLocker.Lock()
+	conn.mediaChunkStreamIDAllocator[idx] = false
+	conn.mediaChunkStreamIDAllocatorLocker.Unlock()
+	conn.CloseChunkStream(id)
+}
+
+func (conn *conn) SetStreamBufferSize(streamID uint32, size uint32) {
+	logger.Debugf("SetStreamBufferSize, id: %d, size: %d", streamID, size)
+	msg := NewMessage(CS_ID_PROTOCOL_CONTROL, USER_CONTROL_MESSAGE, 0, 1, nil)
+	eventType := uint16(EVENT_SET_BUFFER_LENGTH)
+	var err error
+	if err = binary.Write(msg.Buf, binary.BigEndian, &eventType); err != nil {
+		logger.Errorf("SetStreamBufferSize write event type EVENT_SET_BUFFER_LENGTH err: %s", err.Error())
+		return
+	}
+	if err = binary.Write(msg.Buf, binary.BigEndian, &streamID); err != nil {
+		logger.Errorf("SetStreamBufferSize write stream id err: %s", err.Error())
+		return
+	}
+	if err = binary.Write(msg.Buf, binary.BigEndian, &size); err != nil {
+		logger.Errorf("SetStreamBufferSize write size err: %s", err.Error())
+		return
+	}
+	conn.Send(msg)
+}
+
+func (conn *conn) OutboundChunkStream(id uint32) (cs *OutboundChunkStream, found bool) {
+	if v, found := conn.outChunkStreams.Load(id); found {
+		cs, _ = v.(*OutboundChunkStream)
+		return cs, found
+	}
+	return
+}
+
+func (conn *conn) InboundChunkStream(id uint32) (cs *InboundChunkStream, found bool) {
+	if v, found := conn.inChunkStreams.Load(id); found {
+		cs, _ = v.(*InboundChunkStream)
+		return cs, found
+	}
+	return
+}
+
+func (conn *conn) SetWindowAcknowledgementSize() {
+	logger.Debugf("SetWindowAcknowledgementSize")
+	msg := NewMessage(CS_ID_PROTOCOL_CONTROL, WINDOW_ACKNOWLEDGEMENT_SIZE, 0, 0, nil)
+	if err := binary.Write(msg.Buf, binary.BigEndian, &conn.outWindowSize); err != nil {
+		logger.Errorf("SetWindowAcknowledgementSize wrtie window size %d err: %d", conn.outWindowSize, err.Error())
+		return
+	}
+	msg.Size = uint32(msg.Buf.Len())
+	conn.Send(msg)
+}
+
+func (conn *conn) SetPeerBandwidth(peerBandwidth uint32, limitType byte) {
+	logger.Debugf("setPeerBandwidth: %d - %c", peerBandwidth, limitType)
+	msg := NewMessage(CS_ID_PROTOCOL_CONTROL, SET_PEER_BANDWIDTH, 0, 0, nil)
+	if err := binary.Write(msg.Buf, binary.BigEndian, &peerBandwidth); err != nil {
+		logger.Errorf("setPeerBandwidth write peerBandwidth err: %s", err.Error())
+		return
+	}
+	if err := msg.Buf.WriteByte(limitType); err != nil {
+		logger.Errorf("setPeerBandwidth write limitType err: %s", err.Error())
+		return
+	}
+	msg.Size = uint32(msg.Buf.Len())
+	conn.Send(msg)
+}
+
+func (conn *conn) SetChunkSize(size uint32) {
+	logger.Debugf("SetChunkSize, size: %d", size)
+	msg := NewMessage(CS_ID_PROTOCOL_CONTROL, SET_CHUNK_SIZE, 0, 0, nil)
+	if err := binary.Write(msg.Buf, binary.BigEndian, &size); err != nil {
+		logger.Errorf("SetChunkSize write size err: %s", err.Error())
+		return
+	}
+	conn.outChunkSizeTemp = size
+	conn.Send(msg)
+}
+
+func (conn *conn) SendUserControlMessage(eventID uint16) {
+	logger.Debugf("sendUserControlMessage: event id: %d", eventID)
+	msg := NewMessage(CS_ID_PROTOCOL_CONTROL, USER_CONTROL_MESSAGE, 0, 0, nil)
+	if err := binary.Write(msg.Buf, binary.BigEndian, &eventID); err != nil {
+		logger.Errorf("sendUserControlMessage write event type USER_CONTROL_MESSAGE err: %s", err.Error())
+		return
+	}
+	conn.Send(msg)
+}
+
+func (conn *conn) sendLoop() {
+	defer func() {
+		if r := recover(); r != nil {
+			if conn.err == nil {
+				conn.err = r.(error)
+			}
+		}
+		conn.Close()
+	}()
+	for !conn.closed {
+		select {
+		case msg := <-conn.highPriorityMessageQueue:
+			conn.sendMessage(msg)
+		case msg := <-conn.middlePriorityMessageQueue:
+			conn.sendMessage(msg)
+			conn.checkAndSendHighPriorityMessage()
+		case msg := <-conn.lowPriorityMessageQueue:
+			conn.checkAndSendHighPriorityMessage()
+			conn.sendMessage(msg)
+		case <-time.After(time.Second):
+		}
+	}
+}
+
+func (conn *conn) recvLoop() {
+	defer func() {
+		if r := recover(); r != nil {
+			if conn.err == nil {
+				conn.err = r.(error)
+			}
+		}
+		conn.Close()
+		conn.handler.OnClosed(conn)
+	}()
+
+	var cs *InboundChunkStream
+	var remain uint32
+	for !conn.closed {
+		n, vfmt, csi, err := ReadBaseHeader(conn.br)
+		errPanic(err, "Read header")
+		conn.inBytes += uint32(n)
+		v, found := conn.inChunkStreams.Load(csi)
+		if !found || v == nil {
+			cs = NewInboundChunkStream(csi)
+			conn.inChunkStreams.Store(csi, cs)
+		} else {
+			cs, _ = v.(*InboundChunkStream)
+		}
+		// Read header
+		header := &Header{}
+		n, err = header.ReadHeader(conn.br, vfmt, csi, cs.lastHeader)
+		errPanic(err, "Read Header")
+		conn.inBytes += uint32(n)
+
+		var absoluteTimestamp uint32
+		var msg *Message
+		switch vfmt {
+		case HEADER_FMT_FULL:
+			cs.lastHeader = header
+			absoluteTimestamp = header.Timestamp
+		case HEADER_FMT_SAME_STREAM:
+			if cs.lastHeader == nil {
+				logger.Debugf("New message with fmt: %d, csi: %d", vfmt, csi)
+			} else {
+				header.MessageStreamID = cs.lastHeader.MessageStreamID
+			}
+			cs.lastHeader = header
+			absoluteTimestamp = cs.lastInAbsoluteTimestamp + header.Timestamp
+		case HEADER_FMT_SAME_LENGTH_AND_STREAM:
+			if cs.lastHeader == nil {
+				logger.Warnf("New Message with fmt: %d, csi: %d", vfmt, csi)
+			} else {
+				header.MessageStreamID = cs.lastHeader.MessageStreamID
+				header.MessageLength = cs.lastHeader.MessageLength
+				header.MessageTypeID = cs.lastHeader.MessageTypeID
+			}
+			cs.lastHeader = header
+			absoluteTimestamp = cs.lastInAbsoluteTimestamp + header.Timestamp
+		case HEADER_FMT_CONTINUATION:
+			if cs.receivedMessage != nil {
+				msg = cs.receivedMessage
+			}
+			if cs.lastHeader == nil {
+				logger.Warnf("New Message with fmt: %d, csi: %d", vfmt, csi)
+			} else {
+				header.MessageStreamID = cs.lastHeader.MessageStreamID
+				header.MessageLength = cs.lastHeader.MessageLength
+				header.MessageTypeID = cs.lastHeader.MessageTypeID
+				header.Timestamp = cs.lastHeader.Timestamp
+			}
+			cs.lastHeader = header
+			absoluteTimestamp = cs.lastInAbsoluteTimestamp
+		}
+
+		if msg == nil {
+			msg = &Message{
+				ChunkStreamID:     csi,
+				Type:              header.MessageTypeID,
+				Timestamp:         header.RealTimestamp(),
+				Size:              header.MessageLength,
+				StreamID:          header.MessageStreamID,
+				Buf:               &bytes.Buffer{},
+				IsInbound:         true,
+				AbsoluteTimestamp: absoluteTimestamp,
+			}
+		}
+		cs.lastInAbsoluteTimestamp = absoluteTimestamp
+		// Read data
+		remain = msg.Remain()
+		var n64 int64
+		if remain <= conn.inChunkSize {
+			// One chunk message
+			for {
+				n64, err = io.CopyN(msg.Buf, conn.br, int64(remain))
+				if err == nil {
+					conn.inBytes += uint32(n64)
+					if remain <= uint32(n64) {
+						break
+					} else {
+						remain -= uint32(n64)
+						continue
+					}
+				}
+				netErr, ok := err.(net.Error)
+				if !ok || !netErr.Temporary() {
+					errPanic(err, "Read data 1")
+				}
+				TraceLogger().Errorf("message copy blocked: %s", err.Error())
+			}
+			conn.received(msg)
+			cs.receivedMessage = nil
+		} else {
+			remain = conn.inChunkSize
+			for {
+				n64, err = io.CopyN(msg.Buf, conn.br, int64(remain))
+				if err == nil {
+					conn.inBytes += uint32(n64)
+					if remain <= uint32(n64) {
+						break
+					} else {
+						remain -= uint32(n64)
+						continue
+					}
+				}
+				netErr, ok := err.(net.Error)
+				if !ok || !netErr.Temporary() {
+					errPanic(err, "Read data 2")
+				}
+				TraceLogger().Errorf("copy message blocked: %s", err.Error())
+			}
+			cs.receivedMessage = msg
+		}
+
+		if conn.inBytes > (conn.inBytesPreWindow + conn.inWindowSize) {
+			ackMsg := NewMessage(CS_ID_PROTOCOL_CONTROL, ACKNOWLEDGEMENT, 0, absoluteTimestamp+1, nil)
+			errPanic(binary.Write(ackMsg.Buf, binary.BigEndian, conn.inBytes), "ACK Message write data")
+			conn.inBytesPreWindow = conn.inBytes
+			conn.Send(ackMsg)
+		}
+	}
+}
+
+func (conn *conn) error(err error, desc string) {
+	TraceLogger().Errorf("Conn %s err: %s", desc, err.Error())
+	if conn.err != nil {
+		conn.err = err
+	}
+	conn.Close()
+}
+
+func (conn *conn) received(msg *Message) {
+	tmpBuf := make([]byte, 4)
+	var err error
+	var subType, timestampExt byte
+	var dataSize, timestamp uint32
+	if msg.Type == AGGREGATE_MESSAGE_TYPE {
+		var firstAggregateTimestamp uint32
+		for msg.Buf.Len() > 0 {
+			// Byte stream order
+			// Sub message type 1 byte
+			if subType, err = msg.Buf.ReadByte(); err != nil {
+				logger.Errorf("AGGREGATE_MESSAGE_TYPE read sub type err: %s", err.Error())
+				return
+			}
+
+			// Data size 3 bytes, big endian
+			if _, err = io.ReadAtLeast(msg.Buf, tmpBuf[1:], 3); err != nil {
+				logger.Errorf("AGGREGATE_MESSAGE_TYPE read data size err: %s", err.Error())
+				return
+			}
+			dataSize = binary.BigEndian.Uint32(tmpBuf)
+
+			// Timestamp 3 bytes
+			if _, err = io.ReadAtLeast(msg.Buf, tmpBuf[1:], 3); err != nil {
+				logger.Errorf("AGGREGATE_MESSAGE_TYPE read timestamp err: %s", err.Error())
+				return
+			}
+			timestamp = binary.BigEndian.Uint32(tmpBuf)
+
+			// Timestamp extend 1 byte,  result = (result >>> 8) | ((result & 0x000000ff) << 24);
+			if timestampExt, err = msg.Buf.ReadByte(); err != nil {
+				logger.Errorf("AGGREGATE_MESSAGE_TYPE read timestamp extend err: %s", err.Error())
+				return
+			}
+			timestamp |= uint32(timestampExt) << 24
+			if firstAggregateTimestamp == 0 {
+				firstAggregateTimestamp = timestamp
+			}
+
+			// 3 bytes ignored
+			if _, err = io.ReadAtLeast(msg.Buf, tmpBuf[1:], 3); err != nil {
+				logger.Errorf("AGGREGATE_MESSAGE_TYPE read ignore bytes err: %s", err.Error())
+				return
+			}
+
+			// Data
+			subMsg := NewMessage(msg.ChunkStreamID, subType, msg.StreamID, 0, nil)
+			subMsg.Timestamp = 0
+			subMsg.IsInbound = true
+			subMsg.Size = dataSize
+			subMsg.AbsoluteTimestamp = msg.AbsoluteTimestamp
+			if _, err = io.CopyN(subMsg.Buf, msg.Buf, int64(dataSize)); err != nil {
+				logger.Errorf("AGGREGATE_MESSAGE_TYPE copy data err: %s", err.Error())
+				return
+			}
+			conn.received(subMsg)
+
+			// Previous tag size 4 bytes
+			if msg.Buf.Len() >= 4 {
+				if _, err = io.ReadAtLeast(msg.Buf, tmpBuf, 4); err != nil {
+					logger.Errorf("AGGREGATE_MESSAGE_TYPE read previous tag size err: %s", err.Error())
+					return
+				}
+			} else {
+				logger.Errorf("AGGREGATE_MESSAGE_TYPE miss previous tag size")
+				break
+			}
+		}
+	} else {
+		switch msg.ChunkStreamID {
+		case CS_ID_PROTOCOL_CONTROL:
+			switch msg.Type {
+			case SET_CHUNK_SIZE:
+				conn.invokeSetChunkSize(msg)
+			case ABORT_MESSAGE:
+				conn.invokeAbortMessage(msg)
+			case ACKNOWLEDGEMENT:
+				conn.invokeAcknowledgement(msg)
+			case USER_CONTROL_MESSAGE:
+				conn.invokeUserControlMessage(msg)
+			case WINDOW_ACKNOWLEDGEMENT_SIZE:
+				conn.invokeWindowAcknowledgementSize(msg)
+			case SET_PEER_BANDWIDTH:
+				conn.invokeSetPeerBandwidth(msg)
+			default:
+				logger.Debugf("unknown message type %d in protocal control chunk stream", msg.Type)
+			}
+		case CS_ID_COMMAND:
+			if err = conn.receivedCommand(msg); err != nil {
+				return
+			}
+		default:
+			conn.handler.OnReceived(conn, msg)
+		}
+	}
+}
+
+func (conn *conn) receivedCommand(msg *Message) (err error) {
+	if msg.StreamID == 0 {
+		cmd := &Command{}
+		var transactionID float64
+		var object interface{}
+		switch msg.Type {
+		case COMMAND_AMF3:
+			cmd.IsFlex = true
+			if _, err = msg.Buf.ReadByte(); err != nil {
+				logger.Errorf("read first in flex command err: %s", err.Error())
+				return
+			}
+			fallthrough
+		case COMMAND_AMF0:
+			if cmd.Name, err = amf.ReadString(msg.Buf); err != nil {
+				logger.Errorf("AMF0 read name err: %s", err.Error())
+				return
+			}
+			if transactionID, err = amf.ReadDouble(msg.Buf); err != nil {
+				logger.Errorf("AMF0 read transcationId err: %s", err.Error())
+				return
+			}
+			cmd.TransactionID = uint32(transactionID)
+			for msg.Buf.Len() > 0 {
+				if object, err = amf.ReadValue(msg.Buf); err != nil {
+					logger.Errorf("AMF0 read object err: %s", err.Error())
+					return
+				}
+				cmd.Objects = append(cmd.Objects, object)
+			}
+		default:
+			logger.Debugf("Unknown message type %d in command chunk stream", msg.Type)
+		}
+		conn.invokeCommand(cmd)
+	} else {
+		conn.handler.OnReceived(conn, msg)
+	}
+	return
+}
+
+func (conn *conn) sendMessage(msg *Message) {
+	var cs *OutboundChunkStream
+	var err error
+	if v, ok := conn.outChunkStreams.Load(msg.ChunkStreamID); ok {
+		cs = v.(*OutboundChunkStream)
+	}
+	if cs == nil {
+		logger.Debugf("Cannot find chunk stream id %d", msg.ChunkStreamID)
+		return
+	}
+
+	header := cs.NewOutboundHeader(msg)
+	if _, err = header.Write(conn.bw); err != nil {
+		conn.error(err, "send message write header")
+		return
+	}
+
+	if header.MessageLength > conn.outChunkSize {
+		// split into chunks
+		if _, err = CopyToNetwork(conn.bw, msg.Buf, int64(conn.outChunkSize)); err != nil {
+			conn.error(err, "send message copy buffer")
+			return
+		}
+
+		remain := header.MessageLength - conn.outChunkSize
+		for {
+			if err = conn.bw.WriteByte(byte(0xc0 | byte(header.ChunkStreamID))); err != nil {
+				conn.error(err, "send message write Type 3 chunk header")
+				return
+			}
+			if remain > conn.outChunkSize {
+				if _, err = CopyToNetwork(conn.bw, msg.Buf, int64(conn.outChunkSize)); err != nil {
+					conn.error(err, "send message copy split buffer 1")
+					return
+				}
+				remain -= conn.outChunkSize
+			} else {
+				if _, err = CopyToNetwork(conn.bw, msg.Buf, int64(remain)); err != nil {
+					conn.error(err, "send message copy split buffer 2")
+					return
+				}
+				break
+			}
+		}
+	} else {
+		if _, err = CopyToNetwork(conn.bw, msg.Buf, int64(header.MessageLength)); err != nil {
+			conn.error(err, "send message copy buffer")
+			return
+		}
+	}
+	if err = FlushToNetwork(conn.bw); err != nil {
+		conn.error(err, "send message, fulsh 3")
+		return
+	}
+	if msg.ChunkStreamID == CS_ID_PROTOCOL_CONTROL && msg.Type == SET_CHUNK_SIZE && conn.outChunkSizeTemp != 0 {
+		conn.outChunkSize = conn.outChunkSizeTemp
+		conn.outChunkSizeTemp = 0
+	}
+}
+
+func (conn *conn) checkAndSendHighPriorityMessage() {
+	for len(conn.highPriorityMessageQueue) > 0 {
+		msg := <-conn.highPriorityMessageQueue
+		conn.sendMessage(msg)
+	}
+}
+
+func (conn *conn) invokeSetChunkSize(msg *Message) {
+	if err := binary.Read(msg.Buf, binary.BigEndian, &conn.inChunkSize); err != nil {
+		logger.Warnf("conn::invokeSetChunkSize err: %s", err.Error())
+	}
+}
+
+func (conn *conn) invokeAbortMessage(msg *Message) {
+	logger.Debugf("conn::invokeAbortMessage")
+}
+
+func (conn *conn) invokeAcknowledgement(msg *Message) {
+	logger.Debugf("conn::invokeAcknowledgement(): % 2x", msg.Buf.Bytes())
+}
+
+func (conn *conn) invokeUserControlMessage(msg *Message) {
+	var eventType uint16
+	var err error
+	if err = binary.Read(msg.Buf, binary.BigEndian, &eventType); err != nil {
+		logger.Errorf("read event type err: %s", err.Error())
+	}
+	switch eventType {
+	case EVENT_STREAM_BEGIN:
+		logger.Debugf("userControlMessage: EVENT_STREAM_BEGIN")
+	case EVENT_STREAM_EOF:
+		logger.Debugf("userControlMessage: EVENT_STREAM_EOF")
+	case EVENT_STREAM_DRY:
+		logger.Debugf("userControlMessage: EVENT_STREAM_DRY")
+	case EVENT_SET_BUFFER_LENGTH:
+		logger.Debugf("userControlMessage: EVENT_SET_BUFFER_LENGTH")
+	case EVENT_STREAM_IS_RECORDED:
+		logger.Debugf("userControlMessage: EVENT_STREAM_IS_RECORDED")
+	case EVENT_PING_REQUEST:
+		logger.Debugf("userControlMessage: EVENT_PING_REQUEST")
+		var serverTimestamp uint32
+		if err = binary.Read(msg.Buf, binary.BigEndian, &serverTimestamp); err != nil {
+			logger.Errorf("read server timestamp err: %s", err.Error())
+			return
+		}
+		respMsg := NewMessage(CS_ID_PROTOCOL_CONTROL, USER_CONTROL_MESSAGE, 0, msg.Timestamp+1, nil)
+		respEventType := uint16(EVENT_PING_RESPONSE)
+		if err = binary.Write(respMsg.Buf, binary.BigEndian, &respEventType); err != nil {
+			logger.Errorf("write event type EVENT_PING RESPONSE err: %s", err.Error())
+			return
+		}
+		if err = binary.Write(respMsg.Buf, binary.BigEndian, &serverTimestamp); err != nil {
+			logger.Errorf("write EVENT_PING_RESPONSE server timestamp err: %s", err.Error())
+			return
+		}
+		conn.Send(respMsg)
+	case EVENT_PING_RESPONSE:
+		logger.Debugf("userControlMessage: EVENT_PING_RESPONSE")
+	case EVENT_REQUEST_VERIFY:
+		logger.Debugf("userControlMessage: EVENT_REQUEST_VERIFY")
+	case EVENT_RESPOND_VERIFY:
+		logger.Debugf("userControlMessage: EVENT_RESPOND_VERIFY")
+	case EVENT_BUFFER_EMPTY:
+		logger.Debugf("userControlMessage: EVENT_BUFFER_EMPTY")
+	case EVENT_BUFFER_READY:
+		logger.Debugf("userControlMessage: EVENT_BUFFER_READY")
+	default:
+		logger.Debugf("userControlMessage: Unknown user control message: 0x%x", eventType)
+	}
+}
+
+func (conn *conn) invokeWindowAcknowledgementSize(msg *Message) {
+	var size uint32
+	if err := binary.Read(msg.Buf, binary.BigEndian, &size); err != nil {
+		logger.Warnf("conn::invokeWindowAcknowledgementSize read window size err: %s", err.Error())
+		return
+	}
+	conn.inWindowSize = size
+	logger.Debugf("conn::invokeWindowAcknowledgementSize() set inWindowSize: %d", conn.inWindowSize)
+}
+
+func (conn *conn) invokeSetPeerBandwidth(msg *Message) {
+	var err error
+	var size uint32
+	var limit byte
+	if err = binary.Read(msg.Buf, binary.BigEndian, &size); err != nil {
+		logger.Warnf("conn::invokeSetPeerBandwidth read window size err: %s", err.Error())
+		return
+	}
+	conn.inBandwidth = size
+
+	if limit, err = msg.Buf.ReadByte(); err != nil {
+		logger.Warnf("conn::invokeSetPeerBandwidth read limit err: %s", err.Error())
+		return
+	}
+	conn.inBandwidthLimit = uint8(limit)
+	logger.Debugf("conn.inBandwidthLimit = %d", conn.inBandwidthLimit)
+}
+
+func (conn *conn) invokeCommand(cmd *Command) {
+	logger.Debugf("conn::invokeCommand()")
+	conn.handler.OnReceivedRtmpCommand(conn, cmd)
+}

@@ -18,9 +18,6 @@ func newStartCommand() *cobra.Command {
 		},
 	}
 
-	//flags := cmd.Flags()
-	//flags.BoolVar(&opt.V, "xx", "xx", "xxx")
-
 	return cmd
 }
 

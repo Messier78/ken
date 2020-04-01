@@ -4,6 +4,7 @@ go 1.14
 
 require (
 	github.com/gin-gonic/gin v1.5.0
+	github.com/pkg/errors v0.9.1
 	github.com/scythefly/orb v0.0.0-00010101000000-000000000000
 	github.com/spf13/cobra v0.0.6
 	go.uber.org/zap v1.13.0

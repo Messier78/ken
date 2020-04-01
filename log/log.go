@@ -8,10 +8,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/scythefly/orb"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"gopkg.in/natefinch/lumberjack.v2"
+
+	"github.com/scythefly/orb"
 )
 
 var (
@@ -48,16 +49,15 @@ func New(tag string, level zapcore.Level) *zap.SugaredLogger {
 		}
 
 		encoderConf = &zapcore.EncoderConfig{
-			MessageKey:    "msg",
-			LevelKey:      "level",
-			TimeKey:       "time",
-			NameKey:       "logger",
-			CallerKey:     "caller",
-			StacktraceKey: "stacktrace",
-			LineEnding:    zapcore.DefaultLineEnding,
-			EncodeLevel:   zapcore.LowercaseColorLevelEncoder,
-			EncodeTime:    timeEncoder,
-			//EncodeTime:     zapcore.ISO8601TimeEncoder,
+			MessageKey:     "msg",
+			LevelKey:       "level",
+			TimeKey:        "time",
+			NameKey:        "logger",
+			CallerKey:      "caller",
+			StacktraceKey:  "stacktrace",
+			LineEnding:     zapcore.DefaultLineEnding,
+			EncodeLevel:    zapcore.LowercaseColorLevelEncoder,
+			EncodeTime:     timeEncoder,
 			EncodeDuration: zapcore.SecondsDurationEncoder,
 			EncodeCaller:   zapcore.ShortCallerEncoder,
 			EncodeName:     zapcore.FullNameEncoder,
