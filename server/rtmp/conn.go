@@ -3,13 +3,15 @@ package rtmp
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/binary"
-	"errors"
 	"io"
 	"net"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/pkg/errors"
 
 	"ken/server/amf"
 )
@@ -38,6 +40,8 @@ type ConnHandler interface {
 }
 
 type conn struct {
+	ctx    context.Context
+	cancel context.CancelFunc
 	// streams
 	outChunkStreams sync.Map
 	inChunkStreams  sync.Map
@@ -97,7 +101,7 @@ type conn struct {
 	err               error
 }
 
-func NewConn(c net.Conn, br *bufio.Reader, bw *bufio.Writer, handler ConnHandler, maxChannelNumber int) Conn {
+func NewConn(ctx context.Context, c net.Conn, br *bufio.Reader, bw *bufio.Writer, handler ConnHandler, maxChannelNumber int) Conn {
 	conn := &conn{
 		highPriorityMessageQueue:    make(chan *Message, DEFAULT_HIGH_PRIORITY_BUFFER_SIZE),
 		highPriorityMessage:         nil,
@@ -129,6 +133,7 @@ func NewConn(c net.Conn, br *bufio.Reader, bw *bufio.Writer, handler ConnHandler
 		lastTransactionID:           0,
 		err:                         nil,
 	}
+	conn.ctx, conn.cancel = context.WithCancel(ctx)
 
 	// Create Protocal control chunk stream
 	conn.outChunkStreams.Store(CS_ID_PROTOCOL_CONTROL, NewOutboundChunkStream(CS_ID_PROTOCOL_CONTROL))
@@ -300,8 +305,10 @@ func (conn *conn) sendLoop() {
 		}
 		conn.Close()
 	}()
-	for !conn.closed {
+	for {
 		select {
+		case <-conn.ctx.Done():
+			return
 		case msg := <-conn.highPriorityMessageQueue:
 			conn.sendMessage(msg)
 		case msg := <-conn.middlePriorityMessageQueue:
@@ -328,7 +335,12 @@ func (conn *conn) recvLoop() {
 
 	var cs *InboundChunkStream
 	var remain uint32
-	for !conn.closed {
+	for {
+		select {
+		case <-conn.ctx.Done():
+			return
+		default:
+		}
 		n, vfmt, csi, err := ReadBaseHeader(conn.br)
 		errPanic(err, "Read header")
 		conn.inBytes += uint32(n)
@@ -418,7 +430,7 @@ func (conn *conn) recvLoop() {
 				if !ok || !netErr.Temporary() {
 					errPanic(err, "Read data 1")
 				}
-				TraceLogger().Errorf("message copy blocked: %s", err.Error())
+				logger.Errorf("%+v", errors.Wrap(err, "message copy blocked"))
 			}
 			conn.received(msg)
 			cs.receivedMessage = nil
@@ -439,7 +451,7 @@ func (conn *conn) recvLoop() {
 				if !ok || !netErr.Temporary() {
 					errPanic(err, "Read data 2")
 				}
-				TraceLogger().Errorf("copy message blocked: %s", err.Error())
+				logger.Errorf("%+v", errors.Wrap(err, "message copy blocked"))
 			}
 			cs.receivedMessage = msg
 		}
@@ -454,7 +466,7 @@ func (conn *conn) recvLoop() {
 }
 
 func (conn *conn) error(err error, desc string) {
-	TraceLogger().Errorf("Conn %s err: %s", desc, err.Error())
+	logger.Errorf("%+v", errors.Wrap(err, desc))
 	if conn.err != nil {
 		conn.err = err
 	}

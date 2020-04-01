@@ -1,17 +1,19 @@
 #! /bin/bash
 
-ChangeLog="first commit"
-Version="1.0.0"
-BuildTime=`date +'%Y.%m.%d %H:%M:%S'`
+ChangeLog="rtmp server"
+Version="1.0.1"
+BuildTime=$(date +'%Y.%m.%d %H:%M:%S')
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "${DIR}"
 mkdir -p bin/
 
-LDFLAGS=" \
-  -X 'ken/command.BuildTime=${BuildTime}' \
-  -X 'ken/command.Version=${Version}'     \
-  -X 'ken/command.ChangeLog=${ChangeLog}' \
+LDFLAGS="
+  -X 'ken/command.Built=${BuildTime}'
+  -X 'ken/command.Version=${Version}'
+  -X 'ken/command.ChangeLog=${ChangeLog}'
+  -s
+  -w
 "
 
 echo "build ken ..."

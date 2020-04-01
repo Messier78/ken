@@ -3,6 +3,7 @@ package rtmp
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -39,13 +40,13 @@ type InboundConn interface {
 	ConnectRequest() *Command
 }
 
-func NewInboundConn(c net.Conn, r *bufio.Reader, w *bufio.Writer,
+func NewInboundConn(ctx context.Context, c net.Conn, r *bufio.Reader, w *bufio.Writer,
 	authHandler InboundAuthHandler, maxChannelNumber int) (InboundConn, error) {
 	iConn := &inboundConn{
 		authHandler: authHandler,
 		status:      INBOUND_CONN_STATUS_CLOSE,
 	}
-	iConn.conn = NewConn(c, r, w, iConn, maxChannelNumber)
+	iConn.conn = NewConn(ctx, c, r, w, iConn, maxChannelNumber)
 	return iConn, nil
 }
 

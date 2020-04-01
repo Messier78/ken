@@ -3,6 +3,7 @@ package rtmp
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/tls"
 	"fmt"
 	"net"
@@ -49,7 +50,7 @@ type outboundConn struct {
 	streams      sync.Map
 }
 
-func Dial(url string, handler OutboundConnHandler, maxChannelNumber int) (OutboundConn, error) {
+func Dial(ctx context.Context, string, handler OutboundConnHandler, maxChannelNumber int) (OutboundConn, error) {
 	rtmpURL, err := ParseURL(url)
 	if err != nil {
 		return nil, err
@@ -83,7 +84,7 @@ func Dial(url string, handler OutboundConnHandler, maxChannelNumber int) (Outbou
 		status:  OUTBOUND_CONN_STATUS_HANDSHAKE_OK,
 	}
 	oconn.handler.OnStatus(oconn)
-	oconn.conn = NewConn(c, r, w, oconn, maxChannelNumber)
+	oconn.conn = NewConn(ctx, c, r, w, oconn, maxChannelNumber)
 	return oconn, nil
 }
 

@@ -23,7 +23,7 @@ type Server struct {
 }
 
 // NewServer
-func NewServer(network, bindAddress string, ctx context.Context) (*Server, error) {
+func NewServer(ctx context.Context, network, bindAddress string) (*Server, error) {
 	server := &Server{
 		network:     network,
 		bindAddress: bindAddress,
@@ -44,11 +44,36 @@ func NewServer(network, bindAddress string, ctx context.Context) (*Server, error
 	return server, nil
 }
 
-func (s *Server) mainLoop() {
+// StartServer
+func StartServer(ctx context.Context, network, bindAddress string) error {
+	server := &Server{
+		network:     network,
+		bindAddress: bindAddress,
+		exit:        false,
+	}
+	if ctx != nil {
+		server.ctx, server.cancel = context.WithCancel(ctx)
+	} else {
+		server.ctx, server.cancel = context.WithCancel(context.Background())
+	}
+	var err error
+	if server.listener, err = net.Listen(server.network, server.bindAddress); err != nil {
+		return err
+	}
+
+	return server.mainLoop()
+}
+
+func (s *Server) Ctx() context.Context {
+	return s.ctx
+}
+
+func (s *Server) mainLoop() (err error) {
 	for {
 		select {
 		case <-s.ctx.Done():
-			logger.Debugf("%+v", errors.Wrap(s.ctx.Err(), "server loop break"))
+			logger.Debugf("server loop break, err: %s", s.ctx.Err().Error())
+			return s.ctx.Err()
 		default:
 		}
 		c, err := s.listener.Accept()
@@ -86,7 +111,7 @@ func (s *Server) Handshake(c net.Conn) {
 		return
 	}
 
-	if _, err := NewInboundConn(c, br, bw, s, 100); err != nil {
+	if _, err := NewInboundConn(s.ctx, c, br, bw, s, 100); err != nil {
 		logger.Debugf("%+v", errors.Wrap(err, "NewInboundConn"))
 		c.Close()
 	}

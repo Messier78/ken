@@ -10,7 +10,7 @@ import (
 var (
 	Version   = "unknown"
 	ChangeLog = "unknown"
-	BuildTime = "unknown"
+	Built = "unknown"
 )
 
 // NewVersionCommand ...
@@ -24,7 +24,7 @@ func newVersionCommand() *cobra.Command {
     Version: %s
     ChangeLog: %s
     build with %s, at %s
-`, Version, ChangeLog, runtime.Version(), BuildTime)
+`, Version, ChangeLog, runtime.Version(), Built)
 		},
 	}
 
