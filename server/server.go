@@ -17,8 +17,10 @@ func init() {
 	g, ctx = errgroup.WithContext(context.Background())
 }
 
-func Start() {
+func Start() error {
 	g.Go(func() error {
-		return rtmp.StartServer(ctx, "tcp", "localhost")
+		return rtmp.StartServer(ctx, "tcp", "localhost:1935")
 	})
+
+	return g.Wait()
 }

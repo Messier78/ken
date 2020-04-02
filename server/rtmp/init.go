@@ -12,5 +12,5 @@ var (
 )
 
 func init() {
-	log.New("rtmp", zapcore.DebugLevel)
+	logger = log.New("rtmp", zapcore.DebugLevel)
 }

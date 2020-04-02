@@ -60,6 +60,7 @@ func StartServer(ctx context.Context, network, bindAddress string) error {
 	if server.listener, err = net.Listen(server.network, server.bindAddress); err != nil {
 		return err
 	}
+	logger.Debugf("rtmp server started on %s...", bindAddress)
 
 	return server.mainLoop()
 }

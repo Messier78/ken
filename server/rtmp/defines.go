@@ -445,7 +445,8 @@ func ParseURL(url string) (rURL RtmpURL, err error) {
 	}
 	s2 := strings.SplitN(s1[0], ":", 2)
 	if len(s2) == 2 {
-		port, err := strconv.Atoi(s2[1])
+		var port int
+		port, err = strconv.Atoi(s2[1])
 		if err != nil || port > 65535 || port <= 0 {
 			err = fmt.Errorf("invalid url %s", url)
 			return

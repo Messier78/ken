@@ -18,3 +18,7 @@ LDFLAGS="
 
 echo "build ken ..."
 go build -ldflags "${LDFLAGS}" -o "${DIR}/bin/ken" .
+
+if [ a"$1" = "arun" ]; then
+  ${DIR}/bin/ken server start
+fi

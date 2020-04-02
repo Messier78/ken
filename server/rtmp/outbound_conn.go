@@ -50,7 +50,7 @@ type outboundConn struct {
 	streams      sync.Map
 }
 
-func Dial(ctx context.Context, string, handler OutboundConnHandler, maxChannelNumber int) (OutboundConn, error) {
+func Dial(ctx context.Context, url string, handler OutboundConnHandler, maxChannelNumber int) (OutboundConn, error) {
 	rtmpURL, err := ParseURL(url)
 	if err != nil {
 		return nil, err

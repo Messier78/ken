@@ -53,7 +53,7 @@ func HMACSha256(msg []byte, key []byte) ([]byte, error) {
 }
 
 func CreateRandomBlock(size uint) []byte {
-	size64 := size / unit(8)
+	size64 := size / uint(8)
 	var buf bytes.Buffer
 	var r64 int64
 	var i uint
@@ -107,32 +107,12 @@ func ImprintWithDigest(buf, key []byte) uint32 {
 	return digestPos
 }
 
-
-
 func SHandshake(c net.Conn, br *bufio.Reader, bw *bufio.Writer, timeout time.Duration) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = r.(error)
 		}
 	}()
-
-	// Send S0+S1
-	errPanic(bw.WriteByte(0x03), "SHandshake Send S0")
-	s1 := CreateRandomBlock(SIG_SIZE)
-	binary.BigEndian.PutUint32(s1, uint32(0))
-	for i := 0; i < 4; i++ {
-		s1[4+i] = FMS_VERSION[i]
-	}
-	serverDigestOffset := ImprintWithDigest(s1, GENUINE_FMS_KEY[:36])
-	if serverDigestOffset == 0 {
-		return fmt.Errorf("ImprintWithDigest failed")
-	}
-	_, err = bw.Write(s1)
-	errPanic(err, "SHandshake Send S1")
-	if timeout > 0 {
-		c.SetWriteDeadline(time.Now().Add(timeout))
-	}
-	errPanic(bw.Flush(), "SHandshake Flush S0+S1")
 
 	// Read C0
 	if timeout > 0 {
@@ -151,27 +131,62 @@ func SHandshake(c net.Conn, br *bufio.Reader, bw *bufio.Writer, timeout time.Dur
 	}
 	_, err = io.ReadAtLeast(br, c1, SIG_SIZE)
 	errPanic(err, "SHandshake Read C1")
-	logger.Debugf("SHandshake Flash player version is %d.%d.%d.%d", c1[4], c1[5], c1[6], c1[7])
+	logger.Debugf("SHandshake type version: %d.%d.%d.%d", c1[4], c1[5], c1[6], c1[7])
 
-	scheme := 0
-	clientDigestOffset := ValidateDigest(c1, GENUINE_FP_KEY[:30], 8)
-	if clientDigestOffset == 0 {
-		clientDigestOffset = ValidateDigest(c1, GENUINE_FP_KEY[:30], 772)
+	// Send S0
+	errPanic(bw.WriteByte(0x03), "SHandshake Send S0")
+
+	// Send S1
+	var clientDigestOffset uint32
+	var isSimple bool = false
+	if c1[4] == 0 && c1[5] == 0 && c1[6] == 0 && c1[7] == 0 {
+		// simple
+		_, err = bw.Write(c1)
+		isSimple = true
+		errPanic(err, "[simple] SHandshake Send S1")
+	} else {
+		scheme := 0
+		clientDigestOffset = ValidateDigest(c1, GENUINE_FP_KEY[:30], 8)
 		if clientDigestOffset == 0 {
-			return fmt.Errorf("SHandshake C1 validating failed")
+			clientDigestOffset = ValidateDigest(c1, GENUINE_FP_KEY[:30], 772)
+			if clientDigestOffset == 0 {
+				return fmt.Errorf("SHandshake C1 validating failed")
+			}
+			scheme = 1
 		}
-		scheme = 1
+		logger.Debugf("SHandshake scheme = %d", scheme)
+
+		s1 := CreateRandomBlock(SIG_SIZE)
+		binary.BigEndian.PutUint32(s1, uint32(0))
+		for i := 0; i < 4; i++ {
+			s1[4+i] = FMS_VERSION[i]
+		}
+		serverDigestOffset := ImprintWithDigest(s1, GENUINE_FMS_KEY[:36])
+		if serverDigestOffset == 0 {
+			return fmt.Errorf("ImprintWithDigest failed")
+		}
+		_, err = bw.Write(s1)
+		errPanic(err, "[complex] SHandshake Send S1")
 	}
-	logger.Debugf("SHandshake scheme = %d", scheme)
+	if timeout > 0 {
+		c.SetWriteDeadline(time.Now().Add(timeout))
+	}
+	errPanic(bw.Flush(), "SHandshake Flush S0+S1")
+
 	digestResp, err := HMACSha256(c1[clientDigestOffset:clientDigestOffset+SHA256_DIGEST_LENGTH], GENUINE_FMS_KEY)
 	errPanic(err, "SHandshake Generate DigestResp")
 
+	var s2 []byte
 	// Generate S2
-	s2 := CreateRandomBlock(SIG_SIZE)
-	signatureResp, err := HMACSha256(s2[:SIG_SIZE-SHA256_DIGEST_LENGTH], digestResp)
-	errPanic(err, "SHandshake Generate S2 HMACSha256 signature")
-	for idx, b := range signatureResp {
-		s2[SIG_SIZE-SHA256_DIGEST_LENGTH+idx] = b
+	if isSimple {
+		s2 = c1
+	} else {
+		s2 = CreateRandomBlock(SIG_SIZE)
+		signatureResp, err := HMACSha256(s2[:SIG_SIZE-SHA256_DIGEST_LENGTH], digestResp)
+		errPanic(err, "SHandshake Generate S2 HMACSha256 signature")
+		for idx, b := range signatureResp {
+			s2[SIG_SIZE-SHA256_DIGEST_LENGTH+idx] = b
+		}
 	}
 
 	// Send S2
