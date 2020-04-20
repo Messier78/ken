@@ -1,6 +1,6 @@
 package rtmp
 
-import "ken/server/amf"
+import "ken/lib/amf"
 
 type Command struct {
 	IsFlex        bool

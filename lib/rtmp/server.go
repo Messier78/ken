@@ -13,6 +13,12 @@ type ServerHandler interface {
 	NewConnection(conn InboundConn, connectReq *Command, server *Server) bool
 }
 
+type InboundManager interface {
+	NewInboundConn(ctx context.Context, c net.Conn, r *bufio.Reader, w *bufio.Writer,
+		authHandler InboundAuthHandler, maxChannelNumber int) (InboundConn, error)
+	OnConnectAuth(ibConn InboundConn, connectReq *Command) bool
+}
+
 type Server struct {
 	listener    net.Listener
 	network     string
@@ -20,6 +26,7 @@ type Server struct {
 	exit        bool
 	ctx         context.Context
 	cancel      context.CancelFunc
+	iManager    InboundManager
 }
 
 // NewServer
@@ -45,7 +52,7 @@ func NewServer(ctx context.Context, network, bindAddress string) (*Server, error
 }
 
 // StartServer
-func StartServer(ctx context.Context, network, bindAddress string) error {
+func StartServer(ctx context.Context, network, bindAddress string, iManager InboundManager) error {
 	server := &Server{
 		network:     network,
 		bindAddress: bindAddress,
@@ -61,6 +68,12 @@ func StartServer(ctx context.Context, network, bindAddress string) error {
 		return err
 	}
 	logger.Debugf("rtmp server started on %s...", bindAddress)
+
+	if iManager == nil {
+		server.iManager = defaultInManager
+	} else {
+		server.iManager = iManager
+	}
 
 	return server.mainLoop()
 }
@@ -97,27 +110,29 @@ func (s *Server) rebind() {
 }
 
 func (s *Server) Handshake(c net.Conn) {
+	var err error
 	defer func() {
 		if r := recover(); r != nil {
-			err := r.(error)
+			err = r.(error)
 			logger.Errorf("Server Handshake err: %s", err.Error())
 		}
 	}()
 	br := bufio.NewReader(c)
 	bw := bufio.NewWriter(c)
 	timeout := time.Duration(10) * time.Second
-	if err := SHandshake(c, br, bw, timeout); err != nil {
+	if err = SHandshake(c, br, bw, timeout); err != nil {
 		logger.Errorf("SHandshake err: %s", err.Error())
 		c.Close()
 		return
 	}
 
-	if _, err := NewInboundConn(s.ctx, c, br, bw, s, 100); err != nil {
+	// if s.iManager != nil {
+	_, err = s.iManager.NewInboundConn(s.ctx, c, br, bw, s.iManager, 100)
+	// } else {
+	// 	_, err = NewInboundConn(s.ctx, c, br, bw, s, 100)
+	// }
+	if err != nil {
 		logger.Debugf("%+v", errors.Wrap(err, "NewInboundConn"))
 		c.Close()
 	}
-}
-
-func (s *Server) OnConnectAuth(conn InboundConn, req *Command) bool {
-	return false
 }

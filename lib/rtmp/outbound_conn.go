@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"ken/server/amf"
+	"ken/lib/amf"
 )
 
 const (

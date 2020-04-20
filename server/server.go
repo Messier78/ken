@@ -5,7 +5,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"ken/server/rtmp"
+	"ken/lib/rtmp"
 )
 
 var (
@@ -19,7 +19,7 @@ func init() {
 
 func Start() error {
 	g.Go(func() error {
-		return rtmp.StartServer(ctx, "tcp", "localhost:1935")
+		return rtmp.StartServer(ctx, "tcp", "localhost:1935", nil)
 	})
 
 	return g.Wait()

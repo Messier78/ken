@@ -5,7 +5,7 @@ import (
 
 	"github.com/pkg/errors"
 
-	"ken/server/amf"
+	"ken/lib/amf"
 )
 
 type OutboundStreamHandler interface {

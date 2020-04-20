@@ -13,4 +13,5 @@ var (
 
 func init() {
 	logger = log.New("rtmp", zapcore.DebugLevel)
+	logger = logger.Desugar().WithOptions(zap.AddCaller()).Sugar()
 }

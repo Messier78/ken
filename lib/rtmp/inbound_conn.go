@@ -4,13 +4,14 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"net"
 	"sync"
 	"time"
 
-	"ken/server/amf"
+	"github.com/pkg/errors"
+
+	"ken/lib/amf"
 )
 
 const (
@@ -145,38 +146,36 @@ func (iconn *inboundConn) allocStream(stream *inboundStream) uint32 {
 	return i
 }
 
-func (iconn *inboundConn) onConnect(cmd *Command) {
+func (iconn *inboundConn) onConnect(cmd *Command) error {
 	iconn.connectReq = cmd
 	if cmd.Objects == nil || len(cmd.Objects) == 0 {
 		logger.Errorf("onConnect() cmd.Object is nil")
-		iconn.sendConnectErrorResult(cmd)
-		return
+		return iconn.sendConnectErrorResult(cmd)
 	}
 	params, ok := cmd.Objects[0].(amf.Object)
 	if !ok {
 		logger.Errorf("onConnect() parse cmd.Object failed")
-		iconn.sendConnectErrorResult(cmd)
-		return
+		return iconn.sendConnectErrorResult(cmd)
 	}
 
 	if app, ok := params["app"]; !ok {
 		logger.Errorf("onConnect() no app in cmd.Object")
-		iconn.sendConnectErrorResult(cmd)
-		return
+		return iconn.sendConnectErrorResult(cmd)
 	} else if iconn.app, ok = app.(string); !ok {
 		logger.Errorf("onConnect() app is not a string")
-		iconn.sendConnectErrorResult(cmd)
-		return
+		return iconn.sendConnectErrorResult(cmd)
 	}
 
+	var err error
 	if iconn.authHandler.OnConnectAuth(iconn, cmd) {
 		iconn.conn.SetWindowAcknowledgementSize()
 		iconn.conn.SetPeerBandwidth(250000, SET_PEER_BANDWIDTH_DYNAMIC)
 		iconn.conn.SetChunkSize(4096)
-		iconn.sendConnectSucceededResult(cmd)
+		err = iconn.sendConnectSucceededResult(cmd)
 	} else {
-		iconn.sendConnectErrorResult(cmd)
+		err = iconn.sendConnectErrorResult(cmd)
 	}
+	return err
 }
 
 func (iconn *inboundConn) onCreateStream(cmd *Command) {
@@ -205,7 +204,7 @@ func (iconn *inboundConn) onCloseStream(stream *inboundStream) {
 	iconn.handler.OnStreamClosed(iconn, stream)
 }
 
-func (iconn *inboundConn) sendConnectSucceededResult(req *Command) {
+func (iconn *inboundConn) sendConnectSucceededResult(req *Command) error {
 	obj1 := make(amf.Object)
 	obj1["fmsVer"] = fmt.Sprintf("FMS/%s", FMS_VERSION_STRING)
 	obj1["capabilities"] = float64(255)
@@ -213,15 +212,15 @@ func (iconn *inboundConn) sendConnectSucceededResult(req *Command) {
 	obj2["level"] = "status"
 	obj2["code"] = RESULT_CONNECT_OK
 	obj2["description"] = RESULT_CONNECT_OK_DESC
-	iconn.sendConnectRequest(req, "_result", obj1, obj2)
+	return iconn.sendConnectRequest(req, "_result", obj1, obj2)
 }
 
-func (iconn *inboundConn) sendConnectErrorResult(req *Command) {
+func (iconn *inboundConn) sendConnectErrorResult(req *Command) error {
 	obj := make(amf.Object)
 	obj["level"] = "status"
 	obj["code"] = RESULT_CONNECT_REJECTED
 	obj["description"] = RESULT_CONNECT_REJECTED_DESC
-	iconn.sendConnectRequest(req, "_error", nil, obj)
+	return iconn.sendConnectRequest(req, "_error", nil, obj)
 }
 
 func (iconn *inboundConn) sendConnectRequest(req *Command, name string, obj1, obj2 interface{}) (err error) {
@@ -257,7 +256,9 @@ func (iconn *inboundConn) sendCreateStreamSuccessResult(req *Command) (err error
 	cmd.Objects[0] = nil
 	cmd.Objects[1] = int32(1)
 	buf := &bytes.Buffer{}
-	errPanic(cmd.Write(buf), "sendCreateStreamSuccessResult create command")
+	if err = cmd.Write(buf); err != nil {
+		return errors.WithMessage(err, "sendCreateStreamSuccessResult create command")
+	}
 
 	msg := &Message{
 		ChunkStreamID: CS_ID_COMMAND,

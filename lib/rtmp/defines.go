@@ -11,13 +11,13 @@ import (
 
 	"github.com/pkg/errors"
 
-	"ken/server/amf"
+	"ken/lib/amf"
 )
 
 // Chunk Message Header - "fmt" field values
 const (
 	// Chunks of Type 0 are 11 bytes long. This type MUST be used at the
-	// start of a chunk stream, and whenever the stream timestamp goes
+	// startPlay of a chunk stream, and whenever the stream timestamp goes
 	// backward (e.g., because of a backward seek).
 	//
 	//  0                   1                   2                   3

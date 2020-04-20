@@ -4,14 +4,15 @@ import (
 	"bytes"
 	"fmt"
 
-	"ken/server/amf"
+	"ken/lib/amf"
 )
 
 type InboundStreamHandler interface {
 	OnPlayStart(stream InboundStream)
 	OnPublishStart(stream InboundStream)
+	OnReceived(msg *Message) bool
 	OnReceiveAudio(stream InboundStream, on bool)
-	OnRecieveVideo(stream InboundStream, on bool)
+	OnReceiveVideo(stream InboundStream, on bool)
 }
 
 type InboundStream interface {
@@ -28,6 +29,7 @@ type InboundStream interface {
 
 type inboundStream struct {
 	id            uint32
+	genID         int
 	streamName    string
 	conn          *inboundConn
 	chunkStreamID uint32
@@ -66,6 +68,9 @@ func (stream *inboundStream) Close() {
 
 func (stream *inboundStream) Received(msg *Message) bool {
 	if msg.Type == VIDEO_TYPE || msg.Type == AUDIO_TYPE {
+		if stream.handler != nil {
+			return stream.handler.OnReceived(msg)
+		}
 		return false
 	}
 	var err error
@@ -106,6 +111,8 @@ func (stream *inboundStream) Received(msg *Message) bool {
 			return stream.onReceiveAduio(cmd)
 		case "receiveVideo":
 			return stream.onReceiveVideo(cmd)
+		case "deleteStream":
+			return stream.onDeleteStream(cmd)
 		default:
 			logger.Debugf("[%s] Received() unknown cmd: %+v", stream.streamName, cmd)
 		}
@@ -158,13 +165,33 @@ func (stream *inboundStream) onPlay(cmd *Command) bool {
 	stream.conn.conn.SetChunkSize(4096)
 	stream.conn.conn.SendUserControlMessage(EVENT_STREAM_BEGIN)
 	stream.reset()
-	stream.start()
+	stream.startPlay()
 	stream.rtmpSampleAccess()
 	stream.handler.OnPlayStart(stream)
 	return true
 }
 
 func (stream *inboundStream) onPublish(cmd *Command) bool {
+	logger.Debugf(">> onPublish")
+	if cmd.Objects == nil || len(cmd.Objects) < 2 || cmd.Objects[1] == nil {
+		logger.Errorf("inboundStream::onPublish: command error 1 => %+v", cmd)
+		return true
+	}
+	if streamName, ok := cmd.Objects[1].(string); !ok {
+		logger.Errorf("inboundStream::onPublish command error 2 => %+v", cmd)
+	} else {
+		stream.streamName = streamName
+	}
+	logger.Debugf(">>>> stream name: %s", stream.streamName)
+	stream.conn.conn.SetKey(stream.conn.app + stream.streamName)
+	// TODO: get genId
+	handler := appendPublishConn(stream.conn.conn.Key(), stream)
+	if handler == nil {
+		return false
+	}
+	stream.Attach(handler)
+	stream.startPublish()
+	stream.handler.OnPublishStart(stream)
 	return true
 }
 
@@ -173,10 +200,11 @@ func (stream *inboundStream) onReceiveAduio(cmd *Command) bool {
 }
 
 func (stream *inboundStream) onReceiveVideo(cmd *Command) bool {
+	logger.Debugf(">> onReceiveVideo")
 	return true
 }
 
-func (stream *inboundStream) onCloseStream(cmd *Command) bool {
+func (stream *inboundStream) onDeleteStream(cmd *Command) bool {
 	return true
 }
 
@@ -206,7 +234,7 @@ func (stream *inboundStream) reset() {
 	stream.conn.conn.Send(msg)
 }
 
-func (stream *inboundStream) start() {
+func (stream *inboundStream) startPlay() {
 	cmd := &Command{
 		IsFlex:        false,
 		Name:          "onStatus",
@@ -217,12 +245,38 @@ func (stream *inboundStream) start() {
 	cmd.Objects[1] = amf.Object{
 		"level":       "status",
 		"code":        NETSTREAM_PLAY_START,
-		"description": fmt.Sprintf("start playing %s", stream.streamName),
+		"description": fmt.Sprintf("startPlay playing %s", stream.streamName),
 		"details":     stream.streamName,
 	}
 
 	buf := &bytes.Buffer{}
-	errPanic(cmd.Write(buf), "inboundStream start: create command")
+	errPanic(cmd.Write(buf), "inboundStream startPlay: create command")
+	msg := &Message{
+		ChunkStreamID: CS_ID_USER_CONTROL,
+		Type:          COMMAND_AMF0,
+		Size:          uint32(buf.Len()),
+		Buf:           buf,
+	}
+	stream.conn.conn.Send(msg)
+}
+
+func (stream *inboundStream) startPublish() {
+	cmd := &Command{
+		IsFlex:        false,
+		Name:          "onStatus",
+		TransactionID: 0,
+		Objects:       make([]interface{}, 2),
+	}
+	cmd.Objects[0] = nil
+	cmd.Objects[1] = amf.Object{
+		"level":       "status",
+		"code":        NETSTREAM_PUBLISH_START,
+		"description": "Start Publishing",
+		"details":     stream.streamName,
+	}
+
+	buf := &bytes.Buffer{}
+	errPanic(cmd.Write(buf), "inboundStream startPlay: create command")
 	msg := &Message{
 		ChunkStreamID: CS_ID_USER_CONTROL,
 		Type:          COMMAND_AMF0,

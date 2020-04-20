@@ -13,10 +13,13 @@ import (
 
 	"github.com/pkg/errors"
 
-	"ken/server/amf"
+	"ken/lib/amf"
+	"ken/lib/av"
 )
 
 type Conn interface {
+	Key() string
+	SetKey(key string)
 	Close()
 	Send(msg *Message) error
 	CreateChunkStream(id uint32) (*OutboundChunkStream, error)
@@ -31,6 +34,9 @@ type Conn interface {
 	SetPeerBandwidth(peerBandwidth uint32, limitType byte)
 	SetChunkSize(chunkSize uint32)
 	SendUserControlMessage(eventID uint16)
+
+	// for gop cache
+	Store(pkt *av.Packet) error
 }
 
 type ConnHandler interface {
@@ -45,6 +51,7 @@ type conn struct {
 	// streams
 	outChunkStreams sync.Map
 	inChunkStreams  sync.Map
+	keyString       string
 
 	// High-priority send message buffer
 	// Protocol control message are sent with highest priority
@@ -145,6 +152,14 @@ func NewConn(ctx context.Context, c net.Conn, br *bufio.Reader, bw *bufio.Writer
 	go conn.recvLoop()
 
 	return conn
+}
+
+func (conn *conn) Key() string {
+	return conn.keyString
+}
+
+func (conn *conn) SetKey(key string) {
+	conn.keyString = key
 }
 
 func (conn *conn) Close() {
@@ -681,6 +696,7 @@ func (conn *conn) invokeSetChunkSize(msg *Message) {
 	if err := binary.Read(msg.Buf, binary.BigEndian, &conn.inChunkSize); err != nil {
 		logger.Warnf("conn::invokeSetChunkSize err: %s", err.Error())
 	}
+	logger.Debugf("set chunk size: %d", conn.inChunkSize)
 }
 
 func (conn *conn) invokeAbortMessage(msg *Message) {
@@ -770,6 +786,11 @@ func (conn *conn) invokeSetPeerBandwidth(msg *Message) {
 }
 
 func (conn *conn) invokeCommand(cmd *Command) {
-	logger.Debugf("conn::invokeCommand()")
+	logger.Debugf("conn::invokeCommand() ==> %s", cmd.Name)
 	conn.handler.OnReceivedRtmpCommand(conn, cmd)
+}
+
+// for gop
+func (conn *conn) Store(pkt *av.Packet) error {
+	return nil
 }
