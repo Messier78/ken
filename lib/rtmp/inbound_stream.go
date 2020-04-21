@@ -1,10 +1,10 @@
 package rtmp
 
 import (
-	"bytes"
 	"fmt"
 
 	"ken/lib/amf"
+	"ken/lib/av"
 )
 
 type InboundStreamHandler interface {
@@ -31,6 +31,7 @@ type inboundStream struct {
 	id            uint32
 	genID         int
 	streamName    string
+	keyString     string
 	conn          *inboundConn
 	chunkStreamID uint32
 	handler       InboundStreamHandler
@@ -161,6 +162,13 @@ func (stream *inboundStream) onPlay(cmd *Command) bool {
 	} else {
 		stream.streamName = streamName
 	}
+	stream.conn.conn.SetKey(stream.conn.app + stream.streamName)
+	stream.keyString = stream.conn.conn.Key()
+	handler := appendPlayConn(stream.keyString, stream)
+	if handler == nil {
+		return false
+	}
+	stream.Attach(handler)
 	// Response
 	stream.conn.conn.SetChunkSize(4096)
 	stream.conn.conn.SendUserControlMessage(EVENT_STREAM_BEGIN)
@@ -184,8 +192,9 @@ func (stream *inboundStream) onPublish(cmd *Command) bool {
 	}
 	logger.Debugf(">>>> stream name: %s", stream.streamName)
 	stream.conn.conn.SetKey(stream.conn.app + stream.streamName)
+	stream.keyString = stream.conn.conn.Key()
 	// TODO: get genId
-	handler := appendPublishConn(stream.conn.conn.Key(), stream)
+	handler := appendPublishConn(stream.keyString, stream)
 	if handler == nil {
 		return false
 	}
@@ -205,6 +214,8 @@ func (stream *inboundStream) onReceiveVideo(cmd *Command) bool {
 }
 
 func (stream *inboundStream) onDeleteStream(cmd *Command) bool {
+	logger.Debugf(">> onDeleteStream, key: %s", stream.keyString)
+	removeConn(stream.keyString, stream)
 	return true
 }
 
@@ -223,7 +234,7 @@ func (stream *inboundStream) reset() {
 		"details":     stream.streamName,
 	}
 
-	buf := &bytes.Buffer{}
+	buf := av.AcquirePacket()
 	errPanic(cmd.Write(buf), "inboundStream reset: create command")
 	msg := &Message{
 		ChunkStreamID: CS_ID_USER_CONTROL,
@@ -249,7 +260,7 @@ func (stream *inboundStream) startPlay() {
 		"details":     stream.streamName,
 	}
 
-	buf := &bytes.Buffer{}
+	buf := av.AcquirePacket()
 	errPanic(cmd.Write(buf), "inboundStream startPlay: create command")
 	msg := &Message{
 		ChunkStreamID: CS_ID_USER_CONTROL,
@@ -275,7 +286,7 @@ func (stream *inboundStream) startPublish() {
 		"details":     stream.streamName,
 	}
 
-	buf := &bytes.Buffer{}
+	buf := av.AcquirePacket()
 	errPanic(cmd.Write(buf), "inboundStream startPlay: create command")
 	msg := &Message{
 		ChunkStreamID: CS_ID_USER_CONTROL,

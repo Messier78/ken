@@ -19,6 +19,9 @@ func init() {
 
 type Packet struct {
 	bytes.Buffer
+
+	Type           uint8
+	deltaTimestamp uint32
 }
 
 func newPacket() *Packet {
@@ -27,6 +30,7 @@ func newPacket() *Packet {
 
 func AcquirePacket() *Packet {
 	v, _ := pool.Get().(*Packet)
+	v.Reset()
 	return v
 }
 

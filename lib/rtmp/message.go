@@ -1,6 +1,8 @@
 package rtmp
 
-import "bytes"
+import (
+	"ken/lib/av"
+)
 
 type Message struct {
 	ChunkStreamID     uint32
@@ -8,7 +10,7 @@ type Message struct {
 	Size              uint32
 	Type              uint8
 	StreamID          uint32
-	Buf               *bytes.Buffer
+	Buf               *av.Packet
 	IsInbound         bool
 	AbsoluteTimestamp uint32
 }
@@ -20,7 +22,7 @@ func NewMessage(csi uint32, t uint8, sid uint32, ts uint32, data []byte) *Messag
 		StreamID:          sid,
 		Timestamp:         ts,
 		AbsoluteTimestamp: ts,
-		Buf:               &bytes.Buffer{},
+		Buf:               av.AcquirePacket(),
 	}
 	if data != nil {
 		msg.Buf.Write(data)

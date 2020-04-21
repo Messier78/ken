@@ -13,6 +13,7 @@ var (
 )
 
 type Session struct {
+	key           string
 	currentStream *inboundStream
 	iss           orb.Set
 	oss           orb.Set
@@ -30,7 +31,15 @@ func newSession() *Session {
 func appendPublishConn(key string, stream *inboundStream) InboundStreamHandler {
 	v, _ := sessions.LoadOrStore(key, newSession())
 	s := v.(*Session)
+	s.key = key
 	return s.handlePublishStream(stream)
+}
+
+func appendPlayConn(key string, stream *inboundStream) InboundStreamHandler {
+	v, _ := sessions.LoadOrStore(key, newSession)
+	s := v.(*Session)
+	s.key = key
+	return s.handlePlayStream(stream)
 }
 
 func removeConn(key string, stream *inboundStream) {
@@ -56,23 +65,36 @@ func (s *Session) handlePublishStream(stream *inboundStream) InboundStreamHandle
 	return nooo
 }
 
+func (s *Session) handlePlayStream(stream *inboundStream) InboundStreamHandler {
+	logger.Debugf(">>> play session attached...")
+	s.oss.Add(stream)
+	return s
+}
+
 func (s *Session) deleteStream(stream *inboundStream) {
 	if s.oss.Contains(stream) {
 		s.oss.Remove(stream)
 		return
 	}
+	// TODO: iss
 }
 
 func (s *Session) OnPlayStart(stream InboundStream) {
-
+	logger.Debugf(">>> play start, key: %s", s.key)
 }
 
 func (s *Session) OnPublishStart(stream InboundStream) {
-
+	logger.Debugf(">>> publish start, key: %s", s.key)
 }
 
 func (s *Session) OnReceived(msg *Message) bool {
-	logger.Debugf(">>>> Session receive message, type=%d", msg.Type)
+	// logger.Debugf(">>>> Session receive mssage, type=%d", msg.Type)
+	var isKeyFrame bool = false
+	if msg.Type == AUDIO_TYPE || msg.Type == VIDEO_TYPE {
+		// TODO: codec and key frame
+	}
+	s.gop.WritePacket(msg.Buf, isKeyFrame)
+	s.gop.Broadcast()
 	return true
 }
 

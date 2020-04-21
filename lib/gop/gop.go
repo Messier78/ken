@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	defaultRingLength = 4096
+	defaultRingLength = 8192
 )
 
 type Cache struct {
@@ -63,4 +63,8 @@ func (c *Cache) WriteAudioPacket(pkt *av.Packet) {
 	c.r = c.r.Next()
 	c.aac = pkt
 	c.Idx++
+}
+
+func (c *Cache) Broadcast() {
+	c.cond.Broadcast()
 }

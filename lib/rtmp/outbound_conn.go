@@ -2,7 +2,6 @@ package rtmp
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"crypto/tls"
 	"fmt"
@@ -11,6 +10,7 @@ import (
 	"time"
 
 	"ken/lib/amf"
+	"ken/lib/av"
 )
 
 const (
@@ -98,7 +98,7 @@ func (oconn *outboundConn) Connect(params ...interface{}) (err error) {
 		}
 	}()
 
-	buf := &bytes.Buffer{}
+	buf := av.AcquirePacket()
 	_, err = amf.WriteString(buf, "connect")
 	errPanic(err, "'connect'")
 	transactionID := oconn.conn.NewTransactionID()
@@ -162,7 +162,7 @@ func (oconn *outboundConn) CreateStream() (err error) {
 		TransactionID: transactionID,
 		Objects:       make([]interface{}, 1),
 	}
-	buf := &bytes.Buffer{}
+	buf := av.AcquirePacket()
 	if err = cmd.Write(buf); err != nil {
 		return
 	}
@@ -201,7 +201,7 @@ func (oconn *outboundConn) Call(name string, params ...interface{}) (err error) 
 	for idx, param := range params {
 		cmd.Objects[idx+1] = param
 	}
-	buf := &bytes.Buffer{}
+	buf := av.AcquirePacket()
 	if err = cmd.Write(buf); err != nil {
 		return
 	}

@@ -2,7 +2,6 @@ package rtmp
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"fmt"
 	"net"
@@ -12,6 +11,7 @@ import (
 	"github.com/pkg/errors"
 
 	"ken/lib/amf"
+	"ken/lib/av"
 )
 
 const (
@@ -233,7 +233,7 @@ func (iconn *inboundConn) sendConnectRequest(req *Command, name string, obj1, ob
 	cmd.Objects[0] = obj1
 	cmd.Objects[1] = obj2
 
-	buf := &bytes.Buffer{}
+	buf := av.AcquirePacket()
 	// TODO: error handle
 	errPanic(cmd.Write(buf), "sendConnectRequest() create command")
 
@@ -255,7 +255,7 @@ func (iconn *inboundConn) sendCreateStreamSuccessResult(req *Command) (err error
 	}
 	cmd.Objects[0] = nil
 	cmd.Objects[1] = int32(1)
-	buf := &bytes.Buffer{}
+	buf := av.AcquirePacket()
 	if err = cmd.Write(buf); err != nil {
 		return errors.WithMessage(err, "sendCreateStreamSuccessResult create command")
 	}

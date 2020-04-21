@@ -2,7 +2,6 @@ package rtmp
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/binary"
 	"io"
@@ -231,7 +230,7 @@ func (conn *conn) CloseMediaChunkStream(id uint32) {
 func (conn *conn) SetStreamBufferSize(streamID uint32, size uint32) {
 	logger.Debugf("SetStreamBufferSize, id: %d, size: %d", streamID, size)
 	msg := NewMessage(CS_ID_PROTOCOL_CONTROL, USER_CONTROL_MESSAGE, 0, 1, nil)
-	eventType := uint16(EVENT_SET_BUFFER_LENGTH)
+	eventType := EVENT_SET_BUFFER_LENGTH
 	var err error
 	if err = binary.Write(msg.Buf, binary.BigEndian, &eventType); err != nil {
 		logger.Errorf("SetStreamBufferSize write event type EVENT_SET_BUFFER_LENGTH err: %s", err.Error())
@@ -419,7 +418,7 @@ func (conn *conn) recvLoop() {
 				Timestamp:         header.RealTimestamp(),
 				Size:              header.MessageLength,
 				StreamID:          header.MessageStreamID,
-				Buf:               &bytes.Buffer{},
+				Buf:               av.AcquirePacket(),
 				IsInbound:         true,
 				AbsoluteTimestamp: absoluteTimestamp,
 			}
@@ -651,7 +650,7 @@ func (conn *conn) sendMessage(msg *Message) {
 
 		remain := header.MessageLength - conn.outChunkSize
 		for {
-			if err = conn.bw.WriteByte(byte(0xc0 | byte(header.ChunkStreamID))); err != nil {
+			if err = conn.bw.WriteByte(0xc0 | byte(header.ChunkStreamID)); err != nil {
 				conn.error(err, "send message write Type 3 chunk header")
 				return
 			}
