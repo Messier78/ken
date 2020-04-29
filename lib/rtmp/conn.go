@@ -17,8 +17,6 @@ import (
 )
 
 type Conn interface {
-	Key() string
-	SetKey(key string)
 	Close()
 	Send(msg *Message) error
 	CreateChunkStream(id uint32) (*OutboundChunkStream, error)
@@ -153,16 +151,9 @@ func NewConn(ctx context.Context, c net.Conn, br *bufio.Reader, bw *bufio.Writer
 	return conn
 }
 
-func (conn *conn) Key() string {
-	return conn.keyString
-}
-
-func (conn *conn) SetKey(key string) {
-	conn.keyString = key
-}
-
 func (conn *conn) Close() {
 	conn.closed = true
+	conn.cancel()
 	conn.c.Close()
 }
 

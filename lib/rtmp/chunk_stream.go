@@ -88,7 +88,7 @@ func (cs *OutboundChunkStream) NewOutboundHeader(msg *Message) *Header {
 		header.ExtendTimeStamp = 0
 	}
 
-	logger.Debugf("OutboundChunkStream::NewOutboundHeader, header: %+v", header)
+	// logger.Debugf("OutboundChunkStream::NewOutboundHeader, header: %+v", header)
 	cs.lastHeader = header
 	cs.lastOutAbsoluteTimestamp = timestamp
 

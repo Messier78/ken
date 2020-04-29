@@ -17,11 +17,17 @@ func init() {
 	}
 }
 
+// Packet
 type Packet struct {
 	bytes.Buffer
 
-	Type           uint8
-	deltaTimestamp uint32
+	Idx int64
+	// Packet Type as av type
+	Type       uint8
+	IsKeyFrame bool
+	IsCodec    bool
+	Timestamp  uint32
+	Delta      uint32
 }
 
 func newPacket() *Packet {
@@ -36,8 +42,4 @@ func AcquirePacket() *Packet {
 
 func ReleasePacket(pkt *Packet) {
 	pool.Put(pkt)
-}
-
-type Encoder interface {
-	Write(pkt *Packet) error
 }
