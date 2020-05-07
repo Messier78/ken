@@ -1,10 +1,7 @@
 package av
 
 import (
-	"container/ring"
 	"sync"
-
-	"github.com/scythefly/orb"
 )
 
 var (
@@ -20,31 +17,24 @@ func init() {
 	}
 }
 
-type Publisher interface {
-	GenID() int
-	GetStartPos() (avc, aac *Packet, r *ring.Ring, cond *sync.Cond)
-	Idx() int64
-}
-
-type Player interface {
-}
-
 type Session struct {
-	key           string
-	currentStream Publisher
-	publishers    orb.Set
-	players       orb.Set
+	key string
+
+	gop *Cache
 }
 
 func newSession() *Session {
 	return &Session{
-		publishers: orb.NewSet(),
-		players:    orb.NewSet(),
+		gop: NewCache(),
 	}
 }
 
 func AttachToSession(key string) *Session {
-	v, _ := sessions.LoadOrStore(key, newSession())
+	ss := sessionPool.Get()
+	v, ok := sessions.LoadOrStore(key, sessionPool.Get())
+	if ok {
+		sessionPool.Put(ss)
+	}
 	s := v.(*Session)
 	s.key = key
 	return s
@@ -54,32 +44,14 @@ func (s *Session) Reset() {
 	// TODO:
 }
 
-func (s *Session) GetStartPos() (avc, aac *Packet, r *ring.Ring, cond *sync.Cond) {
-	if s.currentStream != nil {
-		return s.currentStream.GetStartPos()
-	}
-	return nil, nil, nil, nil
-}
-
-func (s *Session) HandlePublishStream(p Publisher) {
-	s.publishers.Add(p)
-	if s.currentStream == nil {
-		s.currentStream = p
-	}
-
-	// TODO: overflow
-	if p.GenID() > s.currentStream.GenID() {
-		s.currentStream = p
-	}
-}
-
-func (s *Session) HandlePlayStream(p Player) {
-	s.players.Add(p)
-}
-
 func (s *Session) Idx() int64 {
-	if s.currentStream != nil {
-		return s.currentStream.Idx()
-	}
-	return -1
+	return s.gop.Idx
+}
+
+func (s *Session) NewWriter(genID int) (PacketWriter, error) {
+	return s.gop.NewPacketWriter(genID)
+}
+
+func (s *Session) NewReader() PacketReader {
+	return s.gop.NewPacketReader()
 }

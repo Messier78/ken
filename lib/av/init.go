@@ -9,9 +9,15 @@ import (
 
 var (
 	logger *zap.SugaredLogger
+	conf   *Config
 )
 
 func init() {
 	logger = log.New("av", zapcore.DebugLevel)
 	logger = logger.Desugar().WithOptions(zap.AddCaller()).Sugar()
+	conf = &Config{
+		AudioOnlyGopDuration: 5000,
+		DelayTime:            3000,
+		RingSize:             1024,
+	}
 }

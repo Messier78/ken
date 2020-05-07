@@ -1,10 +1,7 @@
 package rtmp
 
 import (
-	"container/ring"
 	"fmt"
-	"sync"
-	"sync/atomic"
 
 	"ken/lib/amf"
 	"ken/lib/av"
@@ -39,10 +36,11 @@ type inboundStream struct {
 	chunkStreamID uint32
 	bufferLength  uint32
 
-	s           *av.Session
+	s *av.Session
+	w av.PacketWriter
+	r av.PacketReader
+
 	isPublisher bool
-	gop         *av.Cache
-	r           *ring.Ring
 	idx         int64
 	entry       int32
 }
@@ -78,13 +76,13 @@ func (stream *inboundStream) Close() {
 
 func (stream *inboundStream) Received(msg *Message) bool {
 	if msg.Type == VIDEO_TYPE || msg.Type == AUDIO_TYPE {
-		if stream.gop == nil {
-			stream.gop = av.NewGopCache()
+		if stream.w == nil {
+			stream.w, _ = stream.s.NewWriter(stream.genID)
 		}
 		// TODO: codec
 		msg.Buf.Type = msg.Type
 		msg.Buf.Delta = msg.Timestamp
-		stream.gop.WritePacket(CodecPacket(stream, msg.Buf))
+		stream.w.WritePacket(CodecPacket(stream, msg.Buf))
 		return true
 	}
 	var err error
@@ -205,7 +203,6 @@ func (stream *inboundStream) onPublish(cmd *Command) bool {
 	// TODO: get genId
 	stream.isPublisher = true
 	stream.s = av.AttachToSession(stream.keyString)
-	stream.s.HandlePublishStream(stream)
 
 	stream.startPublish()
 	return true
@@ -278,46 +275,19 @@ func (stream *inboundStream) startPlay() {
 }
 
 func (stream *inboundStream) play() {
-	var avc, aac *av.Packet
-	var cond *sync.Cond
-	avc, aac, stream.r, cond = stream.s.GetStartPos()
-	if cond == nil {
-		return
+	if stream.r == nil {
+		stream.r = stream.s.NewReader()
 	}
-	cond.L.Lock()
-	defer cond.L.Unlock()
-	for stream.r == nil || stream.r.Value == nil {
-		cond.Wait()
-		avc, aac, stream.r, _ = stream.s.GetStartPos()
-	}
-	f, _ := stream.r.Value.(*av.Packet)
-	stream.idx = f.Idx
-	if avc != nil {
-		stream.SendData(avc.Type, avc.Bytes(), avc.Timestamp)
-	}
-	if aac != nil {
-		stream.SendData(aac.Type, aac.Bytes(), aac.Timestamp)
-	}
+	var f *av.Packet
+	var err error
 	for {
-		cond.Wait()
-		go stream.send()
-	}
-}
-
-func (stream *inboundStream) send() {
-	// no re-entry
-	if atomic.CompareAndSwapInt32(&stream.entry, 0, 1) {
-		defer func() {
-			stream.entry = 0
-		}()
-		for stream.idx < stream.s.Idx() {
-			f, ok := stream.r.Value.(*av.Packet)
-			if !ok || f == nil {
-				return
-			}
-			stream.idx = f.Idx
-			stream.SendData(f.Type, f.Bytes(), f.Delta)
-			stream.r = stream.r.Next()
+		f, err = stream.r.ReadPacket()
+		if err != nil {
+			return
+		}
+		if err = stream.SendData(f.Type, f.Bytes(), f.Timestamp); err != nil {
+			logger.Errorf("send data return error: %s", err.Error())
+			return
 		}
 	}
 }
@@ -363,17 +333,7 @@ func (stream *inboundStream) GenID() int {
 }
 
 func (stream *inboundStream) Idx() int64 {
-	if stream.gop != nil {
-		return stream.gop.Idx
-	}
 	return -1
-}
-
-func (stream *inboundStream) GetStartPos() (avc, aac *av.Packet, r *ring.Ring, cond *sync.Cond) {
-	if stream.gop != nil {
-		return stream.gop.GetStartPos()
-	}
-	return nil, nil, nil, nil
 }
 
 // //////////////////////////////////////////////////////////////////////
