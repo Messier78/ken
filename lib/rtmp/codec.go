@@ -13,6 +13,7 @@ func CodecPacket(s *inboundStream, f *av.Packet) (ff *av.Packet) {
 	// keyframe
 	if f.Type == VIDEO_TYPE {
 		if buf[0]&0xf0 == 0x10 {
+			// logger.Debugf(">>> key frame received")
 			f.IsKeyFrame = true
 		}
 	}
@@ -22,11 +23,14 @@ func CodecPacket(s *inboundStream, f *av.Packet) (ff *av.Packet) {
 	acodecID := (fmt & 0xf0) >> 4
 	vcodecID := fmt & 0x0f
 
-	if f.Type == AUDIO_TYPE && acodecID == 10 ||
-		(f.Type == VIDEO_TYPE && (vcodecID == 7 || vcodecID == 12)) {
-		if buf[1] == 0 {
-			f.IsCodec = true
-		}
+	if f.Type == AUDIO_TYPE && acodecID == 10 && buf[1] == 0 {
+		f.IsCodec = true
+		f.IsAAC = true
+		logger.Debugf(">>> AAC")
+	}
+	if f.Type == VIDEO_TYPE && (vcodecID == 7 || vcodecID == 12) && buf[1] == 0 {
+		f.IsCodec = true
+		logger.Debugf(">>> AVC")
 	}
 	return
 }

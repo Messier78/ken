@@ -179,6 +179,7 @@ func (iconn *inboundConn) onConnect(cmd *Command) error {
 }
 
 func (iconn *inboundConn) onCreateStream(cmd *Command) {
+	logger.Debugf(">>> inboundConn, onCreateStream")
 	cs, err := iconn.conn.CreateMediaChunkStream()
 	if err != nil {
 		logger.Errorf("CreateStream() create media chunk stream err: %s", err.Error())
@@ -187,12 +188,17 @@ func (iconn *inboundConn) onCreateStream(cmd *Command) {
 	stream := &inboundStream{
 		conn:          iconn,
 		chunkStreamID: cs.ID,
+		closed:        false,
 	}
+	// TODO: use parent ctx
+	stream.ctx, stream.cancel = context.WithCancel(context.Background())
 	iconn.allocStream(stream)
 	iconn.status = INBOUND_CONN_STATUS_CREATE_STREAM_OK
 	iconn.handler.OnStatus(iconn)
 	iconn.handler.OnStreamCreated(iconn, stream)
-	iconn.sendCreateStreamSuccessResult(cmd)
+	if err = iconn.sendCreateStreamSuccessResult(cmd); err != nil {
+		logger.Errorf("%+v", errors.Wrap(err, "inboundConn::sendCreateStreamSuccessResult"))
+	}
 }
 
 func (iconn *inboundConn) releaseStream(streamID uint32) {

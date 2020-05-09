@@ -694,7 +694,7 @@ func (conn *conn) invokeAbortMessage(msg *Message) {
 }
 
 func (conn *conn) invokeAcknowledgement(msg *Message) {
-	logger.Debugf("conn::invokeAcknowledgement(): % 2x", msg.Buf.Bytes())
+	// logger.Debugf("conn::invokeAcknowledgement(): % 2x", msg.Buf.Bytes())
 }
 
 func (conn *conn) invokeUserControlMessage(msg *Message) {

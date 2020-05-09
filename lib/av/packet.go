@@ -27,6 +27,7 @@ type Packet struct {
 	Type       uint8
 	IsKeyFrame bool
 	IsCodec    bool
+	IsAAC      bool
 	IsMeta     bool
 	Timestamp  uint32
 	Delta      uint32
@@ -68,7 +69,7 @@ type packetReader struct {
 
 // ReadPacket
 func (r *packetReader) ReadPacket() (*Packet, error) {
-	if r.idx < r.cache.gopStart.idx {
+	if r.idx < r.cache.StartIdx {
 		r.reset()
 	}
 	var f *Packet
@@ -82,11 +83,11 @@ func (r *packetReader) ReadPacket() (*Packet, error) {
 	defer r.cond.L.Unlock()
 	r.cond.Wait()
 
-	f = r.node.f
 	if r.node.next == nil {
 		// TODO: return session status
-		return f, io.EOF
+		return nil, io.EOF
 	}
+	f = r.node.f
 	r.node = r.node.next
 	return f, nil
 }

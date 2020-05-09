@@ -25,6 +25,7 @@ type gop struct {
 
 	// codec
 	isCodec      bool
+	isAAC        bool
 	codecVersion int
 
 	next, prev      *gop
@@ -41,16 +42,22 @@ func (g *gop) Write(f *Packet) {
 		g.node = n
 	} else {
 		g.node.next = n
+		g.node = g.node.next
 	}
-	g.duration += f.Timestamp
+	g.duration += f.Delta
 	g.length++
 }
 
 func (g *gop) WriteInNewGop(f *Packet, idx int64) *gop {
+	logger.Debugf("Write in new gop, start idx: %d", idx)
 	ng := &gop{
+		timestamp: f.Timestamp,
 		idx:       idx,
 		prev:      g,
 		nodeStart: &pktNode{f: f},
+	}
+	if idx == 0 {
+		ng.isAAC = f.IsAAC
 	}
 	ng.node = ng.nodeStart
 	g.next = ng

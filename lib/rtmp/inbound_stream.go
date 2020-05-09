@@ -1,6 +1,7 @@
 package rtmp
 
 import (
+	"context"
 	"fmt"
 
 	"ken/lib/amf"
@@ -28,6 +29,8 @@ type InboundStream interface {
 }
 
 type inboundStream struct {
+	ctx           context.Context
+	cancel        context.CancelFunc
 	id            uint32
 	genID         int
 	streamName    string
@@ -43,6 +46,7 @@ type inboundStream struct {
 	isPublisher bool
 	idx         int64
 	entry       int32
+	closed      bool
 }
 
 func (stream *inboundStream) Conn() InboundConn {
@@ -174,15 +178,20 @@ func (stream *inboundStream) onPlay(cmd *Command) bool {
 		stream.streamName = streamName
 	}
 	stream.keyString = stream.conn.app + stream.streamName
+	logger.Debugf("inboundStream::onPlay, key: %s", stream.keyString)
 	stream.s = av.AttachToSession(stream.keyString)
-	stream.s.HandlePlayStream(stream)
+	if stream.r = stream.s.NewReader(); stream.r == nil {
+		logger.Debugf("cannot get session reader!!!!!")
+		return false
+	}
 	// Response
 	stream.conn.conn.SetChunkSize(4096)
 	stream.conn.conn.SendUserControlMessage(EVENT_STREAM_BEGIN)
-	stream.reset()
+	// stream.reset()
 	stream.startPlay()
 	stream.rtmpSampleAccess()
 
+	logger.Debugf("---- client start play ----")
 	go stream.play()
 	return true
 }
@@ -218,6 +227,8 @@ func (stream *inboundStream) onReceiveVideo(cmd *Command) bool {
 }
 
 func (stream *inboundStream) onDeleteStream(cmd *Command) bool {
+	stream.closed = true
+	stream.cancel()
 	logger.Debugf(">> onDeleteStream, key: %s", stream.keyString)
 	return true
 }
@@ -277,15 +288,22 @@ func (stream *inboundStream) startPlay() {
 func (stream *inboundStream) play() {
 	if stream.r == nil {
 		stream.r = stream.s.NewReader()
+		if stream.r == nil {
+			logger.Errorf(">>>>>>>>>>>>>>>>>>>>>>> packet reader is nil")
+		}
 	}
 	var f *av.Packet
 	var err error
-	for {
+	for !stream.closed {
 		f, err = stream.r.ReadPacket()
-		if err != nil {
-			return
+		if f == nil {
+			continue
 		}
-		if err = stream.SendData(f.Type, f.Bytes(), f.Timestamp); err != nil {
+		// if err != nil {
+		// 	return
+		// }
+		// logger.Debugf("---- send data to client, type: %d, idx: %d, delta: %d", f.Type, f.Idx, f.Delta)
+		if err = stream.SendData(f.Type, f.Bytes(), f.Delta); err != nil {
 			logger.Errorf("send data return error: %s", err.Error())
 			return
 		}

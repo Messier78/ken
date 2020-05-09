@@ -34,6 +34,8 @@ func AttachToSession(key string) *Session {
 	v, ok := sessions.LoadOrStore(key, sessionPool.Get())
 	if ok {
 		sessionPool.Put(ss)
+	} else {
+		v.(*Session).gop.SetID(key)
 	}
 	s := v.(*Session)
 	s.key = key
