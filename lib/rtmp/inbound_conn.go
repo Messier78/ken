@@ -59,15 +59,15 @@ type inboundConn struct {
 	conn        Conn
 	status      uint
 	err         error
-	streams     sync.Map
+	streams     map[uint32]*inboundStream
 	locker      sync.Mutex
 }
 
 // ////////////////////////////////////////////////////////////////////////////////////////
 // ConnHandler
 func (iconn *inboundConn) OnReceived(conn Conn, msg *Message) {
-	if v, ok := iconn.streams.Load(msg.StreamID); ok {
-		stream, _ := v.(*inboundStream)
+	stream, found := iconn.streams[msg.StreamID]
+	if found {
 		if !stream.Received(msg) {
 			iconn.handler.OnReceived(iconn.conn, msg)
 		}
@@ -92,14 +92,11 @@ func (iconn *inboundConn) OnClosed(conn Conn) {
 	iconn.handler.OnStatus(iconn)
 }
 
-// ////////////////////////////////////////////////////////////////////////////////////////
 // InboundConn
 func (iconn *inboundConn) Close() {
-	iconn.streams.Range(func(key, value interface{}) bool {
-		stream, _ := value.(*inboundStream)
+	for _, stream := range iconn.streams {
 		stream.Close()
-		return true
-	})
+	}
 	time.Sleep(time.Second)
 	iconn.status = INBOUND_CONN_STATUS_CLOSE
 	iconn.conn.Close()
@@ -129,16 +126,16 @@ func (iconn *inboundConn) ConnectRequest() *Command {
 	return iconn.connectReq
 }
 
-// ////////////////////////////////////////////////////////////////////////////////////////
 // inboundConn
 func (iconn *inboundConn) allocStream(stream *inboundStream) uint32 {
 	iconn.locker.Lock()
 	defer iconn.locker.Unlock()
 	var i uint32 = 1
+	var ok bool
 	for {
-		if _, found := iconn.streams.Load(i); !found {
+		if _, ok = iconn.streams[i]; !ok {
+			iconn.streams[i] = stream
 			stream.id = i
-			iconn.streams.Store(i, stream)
 			break
 		}
 		i++
@@ -202,7 +199,7 @@ func (iconn *inboundConn) onCreateStream(cmd *Command) {
 }
 
 func (iconn *inboundConn) releaseStream(streamID uint32) {
-	iconn.streams.Delete(streamID)
+	delete(iconn.streams, streamID)
 }
 
 func (iconn *inboundConn) onCloseStream(stream *inboundStream) {

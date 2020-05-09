@@ -3,6 +3,8 @@ package rtmp
 import (
 	"context"
 	"fmt"
+	"net/url"
+	"strconv"
 
 	"ken/lib/amf"
 	"ken/lib/av"
@@ -177,7 +179,12 @@ func (stream *inboundStream) onPlay(cmd *Command) bool {
 	} else {
 		stream.streamName = streamName
 	}
-	stream.keyString = stream.conn.app + stream.streamName
+	u, err := url.Parse(stream.streamName)
+	if err != nil || u == nil {
+		logger.Errorf("parse stream name failed: %s", stream.streamName)
+		return false
+	}
+	stream.keyString = stream.conn.app + u.Path
 	logger.Debugf("inboundStream::onPlay, key: %s", stream.keyString)
 	stream.s = av.AttachToSession(stream.keyString)
 	if stream.r = stream.s.NewReader(); stream.r == nil {
@@ -207,9 +214,14 @@ func (stream *inboundStream) onPublish(cmd *Command) bool {
 	} else {
 		stream.streamName = streamName
 	}
+	u, err := url.Parse(stream.streamName)
+	if err != nil || u == nil {
+		logger.Errorf("parse stream name failed: %s", stream.streamName)
+		return false
+	}
 	logger.Debugf(">>>> stream name: %s", stream.streamName)
-	stream.keyString = stream.conn.app + stream.streamName
-	// TODO: get genId
+	stream.keyString = stream.conn.app + u.Path
+	stream.genID, _ = strconv.Atoi(u.Query().Get("genId"))
 	stream.isPublisher = true
 	stream.s = av.AttachToSession(stream.keyString)
 
@@ -299,6 +311,7 @@ func (stream *inboundStream) play() {
 		if f == nil {
 			continue
 		}
+		// TODO: get session status by err
 		// if err != nil {
 		// 	return
 		// }

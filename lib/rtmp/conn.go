@@ -46,8 +46,8 @@ type conn struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	// streams
-	outChunkStreams sync.Map
-	inChunkStreams  sync.Map
+	outChunkStreams map[uint32]*OutboundChunkStream
+	inChunkStreams  map[uint32]*InboundChunkStream
 	keyString       string
 
 	// High-priority send message buffer
@@ -140,11 +140,11 @@ func NewConn(ctx context.Context, c net.Conn, br *bufio.Reader, bw *bufio.Writer
 	conn.ctx, conn.cancel = context.WithCancel(ctx)
 
 	// Create Protocal control chunk stream
-	conn.outChunkStreams.Store(CS_ID_PROTOCOL_CONTROL, NewOutboundChunkStream(CS_ID_PROTOCOL_CONTROL))
+	conn.outChunkStreams[CS_ID_PROTOCOL_CONTROL] = NewOutboundChunkStream(CS_ID_PROTOCOL_CONTROL)
 	// Create Command message chunk stream
-	conn.outChunkStreams.Store(CS_ID_COMMAND, NewOutboundChunkStream(CS_ID_COMMAND))
+	conn.outChunkStreams[CS_ID_COMMAND] = NewOutboundChunkStream(CS_ID_COMMAND)
 	// Create User control chunk stream
-	conn.outChunkStreams.Store(CS_ID_USER_CONTROL, NewOutboundChunkStream(CS_ID_USER_CONTROL))
+	conn.outChunkStreams[CS_ID_USER_CONTROL] = NewOutboundChunkStream(CS_ID_USER_CONTROL)
 	go conn.sendLoop()
 	go conn.recvLoop()
 
@@ -172,17 +172,17 @@ func (conn *conn) Send(msg *Message) error {
 }
 
 func (conn *conn) CreateChunkStream(id uint32) (*OutboundChunkStream, error) {
-	var err error
-	v, found := conn.outChunkStreams.LoadOrStore(id, NewOutboundChunkStream(id))
-	if found {
-		return nil, errors.New("chunk stream existed")
+	cs, ok := conn.outChunkStreams[id]
+	if ok {
+		return nil, errors.New("ChunkStream existed")
 	}
-	cs, _ := v.(*OutboundChunkStream)
-	return cs, err
+	cs = NewOutboundChunkStream(id)
+	conn.outChunkStreams[id] = cs
+	return cs, nil
 }
 
 func (conn *conn) CloseChunkStream(id uint32) {
-	conn.outChunkStreams.Delete(id)
+	delete(conn.outChunkStreams, id)
 }
 
 func (conn *conn) NewTransactionID() uint32 {
@@ -239,18 +239,20 @@ func (conn *conn) SetStreamBufferSize(streamID uint32, size uint32) {
 }
 
 func (conn *conn) OutboundChunkStream(id uint32) (cs *OutboundChunkStream, found bool) {
-	if v, found := conn.outChunkStreams.Load(id); found {
-		cs, _ = v.(*OutboundChunkStream)
-		return cs, found
-	}
+	// if v, found := conn.outChunkStreams.Load(id); found {
+	// 	cs, _ = v.(*OutboundChunkStream)
+	// 	return cs, found
+	// }
+	cs, found = conn.outChunkStreams[id]
 	return
 }
 
 func (conn *conn) InboundChunkStream(id uint32) (cs *InboundChunkStream, found bool) {
-	if v, found := conn.inChunkStreams.Load(id); found {
-		cs, _ = v.(*InboundChunkStream)
-		return cs, found
-	}
+	// if v, found := conn.inChunkStreams.Load(id); found {
+	// 	cs, _ = v.(*InboundChunkStream)
+	// 	return cs, found
+	// }
+	cs, found = conn.inChunkStreams[id]
 	return
 }
 
@@ -339,6 +341,7 @@ func (conn *conn) recvLoop() {
 	}()
 
 	var cs *InboundChunkStream
+	var ok bool
 	var remain uint32
 	for {
 		select {
@@ -349,13 +352,11 @@ func (conn *conn) recvLoop() {
 		n, vfmt, csi, err := ReadBaseHeader(conn.br)
 		errPanic(err, "Read header")
 		conn.inBytes += uint32(n)
-		v, found := conn.inChunkStreams.Load(csi)
-		if !found || v == nil {
+		if cs, ok = conn.inChunkStreams[csi]; !ok || cs == nil {
 			cs = NewInboundChunkStream(csi)
-			conn.inChunkStreams.Store(csi, cs)
-		} else {
-			cs, _ = v.(*InboundChunkStream)
+			conn.inChunkStreams[csi] = cs
 		}
+
 		// Read header
 		header := &Header{}
 		n, err = header.ReadHeader(conn.br, vfmt, csi, cs.lastHeader)
@@ -616,13 +617,9 @@ func (conn *conn) receivedCommand(msg *Message) (err error) {
 }
 
 func (conn *conn) sendMessage(msg *Message) {
-	var cs *OutboundChunkStream
 	var err error
-	if v, ok := conn.outChunkStreams.Load(msg.ChunkStreamID); ok {
-		cs = v.(*OutboundChunkStream)
-	}
-	if cs == nil {
-		logger.Debugf("Cannot find chunk stream id %d", msg.ChunkStreamID)
+	cs, ok := conn.outChunkStreams[msg.ChunkStreamID]
+	if !ok || cs == nil {
 		return
 	}
 

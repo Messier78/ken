@@ -52,7 +52,7 @@ func NewServer(ctx context.Context, network, bindAddress string) (*Server, error
 }
 
 // StartServer
-func StartServer(ctx context.Context, network, bindAddress string, iManager InboundManager) error {
+func StartServer(ctx context.Context, network, bindAddress string) error {
 	server := &Server{
 		network:     network,
 		bindAddress: bindAddress,
@@ -69,11 +69,7 @@ func StartServer(ctx context.Context, network, bindAddress string, iManager Inbo
 	}
 	logger.Debugf("rtmp server started on %s...", bindAddress)
 
-	if iManager == nil {
-		server.iManager = defaultInManager
-	} else {
-		server.iManager = iManager
-	}
+	server.iManager = defaultInManager
 
 	return server.mainLoop()
 }
@@ -127,9 +123,9 @@ func (s *Server) Handshake(c net.Conn) {
 	}
 
 	// if s.iManager != nil {
-	_, err = s.iManager.NewInboundConn(s.ctx, c, br, bw, s.iManager, 100)
+	// _, err = s.iManager.NewInboundConn(s.ctx, c, br, bw, s.iManager, 100)
 	// } else {
-	// 	_, err = NewInboundConn(s.ctx, c, br, bw, s, 100)
+	_, err = NewInboundConn(s.ctx, c, br, bw, s, 100)
 	// }
 	if err != nil {
 		logger.Debugf("%+v", errors.Wrap(err, "NewInboundConn"))

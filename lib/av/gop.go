@@ -23,11 +23,6 @@ type gop struct {
 	idx    int64
 	length int
 
-	// codec
-	isCodec      bool
-	isAAC        bool
-	codecVersion int
-
 	next, prev      *gop
 	node, nodeStart *pktNode
 }
@@ -37,13 +32,8 @@ func (g *gop) Write(f *Packet) {
 		f:    f,
 		next: nil,
 	}
-	// TODO: error, g.node should not be nil
-	if g.node == nil {
-		g.node = n
-	} else {
-		g.node.next = n
-		g.node = g.node.next
-	}
+	g.node.next = n
+	g.node = g.node.next
 	g.duration += f.Delta
 	g.length++
 }
@@ -55,9 +45,6 @@ func (g *gop) WriteInNewGop(f *Packet, idx int64) *gop {
 		idx:       idx,
 		prev:      g,
 		nodeStart: &pktNode{f: f},
-	}
-	if idx == 0 {
-		ng.isAAC = f.IsAAC
 	}
 	ng.node = ng.nodeStart
 	g.next = ng
