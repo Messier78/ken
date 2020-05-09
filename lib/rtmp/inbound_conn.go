@@ -46,12 +46,16 @@ func NewInboundConn(ctx context.Context, c net.Conn, r *bufio.Reader, w *bufio.W
 	iConn := &inboundConn{
 		authHandler: authHandler,
 		status:      INBOUND_CONN_STATUS_CLOSE,
+		streams:     make(map[uint32]*inboundStream),
 	}
+	iConn.ctx, iConn.cancel = context.WithCancel(ctx)
 	iConn.conn = NewConn(ctx, c, r, w, iConn, maxChannelNumber)
 	return iConn, nil
 }
 
 type inboundConn struct {
+	ctx         context.Context
+	cancel      context.CancelFunc
 	connectReq  *Command
 	app         string
 	handler     InboundConnHandler
@@ -187,8 +191,7 @@ func (iconn *inboundConn) onCreateStream(cmd *Command) {
 		chunkStreamID: cs.ID,
 		closed:        false,
 	}
-	// TODO: use parent ctx
-	stream.ctx, stream.cancel = context.WithCancel(context.Background())
+	stream.ctx, stream.cancel = context.WithCancel(iconn.ctx)
 	iconn.allocStream(stream)
 	iconn.status = INBOUND_CONN_STATUS_CREATE_STREAM_OK
 	iconn.handler.OnStatus(iconn)

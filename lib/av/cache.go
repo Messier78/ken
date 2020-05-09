@@ -49,15 +49,13 @@ type Cache struct {
 }
 
 func NewCache() *Cache {
+	f := AcquirePacket()
+	f.Idx = -1
 	c := &Cache{
 		codecSwapLocker: &sync.RWMutex{},
 		AudioOnly:       true,
 		prevIsCodec:     false,
-		codecNodeStart: &pktNode{
-			f: &Packet{
-				Idx: -1,
-			},
-		},
+		codecNodeStart:  &pktNode{f: f},
 		gPos: &gop{
 			idx:       0,
 			nodeStart: &pktNode{},
@@ -191,25 +189,28 @@ func (c *Cache) NewPacketReader() PacketReader {
 		cache: c,
 		cond:  c.cond,
 	}
-	r.node = c.getStartNode()
+	r.node, r.startTime = c.getStartNode()
 	if r.node == nil {
 		return nil
 	}
-	node := r.node
-	for i := 0; i < 5; i++ {
-		logger.Debugf("||||---- frame idx: %d", node.f.Idx)
-		if node.next != nil {
-			node = node.next
-		} else {
-			break
+	/*
+		node := r.node
+		for i := 0; i < 5; i++ {
+			logger.Debugf("||||---- frame idx: %d", node.f.Idx)
+			if node.next != nil {
+				node = node.next
+			} else {
+				break
+			}
 		}
-	}
+	*/
 	return r
 }
 
 // getStartNode return packet node which begins
 // with avc/aac if exists and key frame packet
-func (c *Cache) getStartNode() *pktNode {
+func (c *Cache) getStartNode() (*pktNode, uint32) {
+	logger.Infof("Cache, getStartNode...")
 	if c.gopStart.next == nil {
 		// TODO: relay
 		c.cond.L.Lock()
@@ -228,7 +229,7 @@ func (c *Cache) getStartNode() *pktNode {
 		node = node.next
 	}
 	for node != nil {
-		logger.Infof(">>> codec idx: %d", node.f.Idx)
+		// logger.Infof(">>> codec idx: %d", node.f.Idx)
 		if node.f.Idx > pos.idx {
 			break
 		}
@@ -245,19 +246,28 @@ func (c *Cache) getStartNode() *pktNode {
 		pnode.next = &pktNode{
 			f: avc,
 		}
+		logger.Debugf(">>> link AVC, idx: %d, len: %d", avc.Idx, avc.Len())
 		pnode = pnode.next
 	}
 	if aac != nil {
 		pnode.next = &pktNode{
 			f: aac,
 		}
+		logger.Debugf(">>> link AAC, idx: %d, len: %d", aac.Idx, aac.Len())
 		pnode = pnode.next
 	}
 	pnode.next = &pktNode{
 		f:    pos.nodeStart.f,
 		next: pos.nodeStart.next,
 	}
-	return nnode.next
+	logger.Debugf(">>> link first key frame, idx: %d", pos.nodeStart.f.Idx)
+
+	node = c.codecNodeStart
+	for node != nil {
+		logger.Infof("- - - - - codec list, idx: %d, len: %d", node.f.Idx, node.f.Len())
+		node = node.next
+	}
+	return nnode.next, pos.nodeStart.f.Timestamp
 }
 
 // monitor
@@ -265,7 +275,7 @@ func (c *Cache) monitor() {
 	for {
 		select {
 		case <-time.After(5 * time.Second):
-			logger.Debugf(">>> [%s] idx: %d, cache.Idx: %d, timestamp: %d", c.keyString, c.Idx, c.LatestTimestamp)
+			logger.Debugf(">>> [%s] cache.Idx: %d, timestamp: %d", c.keyString, c.Idx, c.LatestTimestamp)
 		}
 	}
 }

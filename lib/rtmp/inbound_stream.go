@@ -169,6 +169,32 @@ func (stream *inboundStream) SendData(dataType uint8, data []byte, deltaTimestam
 	return stream.conn.Send(msg)
 }
 
+func (stream *inboundStream) SendPacket(pkt *av.Packet) error {
+	var csid uint32
+	switch pkt.Type {
+	case VIDEO_TYPE:
+		csid = stream.chunkStreamID - 4
+	case AUDIO_TYPE:
+		csid = stream.chunkStreamID - 4
+	default:
+		csid = stream.chunkStreamID
+	}
+	msg := &Message{
+		ChunkStreamID:     csid,
+		Timestamp:         pkt.Delta,
+		Type:              pkt.Type,
+		StreamID:          stream.id,
+		Buf:               pkt,
+		AbsoluteTimestamp: pkt.Timestamp,
+	}
+	// if msg.Buf.Idx%100 == 0 {
+	// 	logger.Debugf(">>> client absolute timestamp: %d", msg.AbsoluteTimestamp)
+	// }
+	msg.Size = uint32(msg.Buf.Len())
+
+	return stream.conn.Send(msg)
+}
+
 func (stream *inboundStream) onPlay(cmd *Command) bool {
 	if cmd.Objects == nil || len(cmd.Objects) < 2 || cmd.Objects[1] == nil {
 		logger.Errorf("inboundStream::onPlay: command error 1 => %+v", cmd)
@@ -180,8 +206,8 @@ func (stream *inboundStream) onPlay(cmd *Command) bool {
 		stream.streamName = streamName
 	}
 	u, err := url.Parse(stream.streamName)
-	if err != nil || u == nil {
-		logger.Errorf("parse stream name failed: %s", stream.streamName)
+	if err != nil {
+		logger.Errorf("parse stream name failed: %s, err: %s", stream.streamName, err.Error())
 		return false
 	}
 	stream.keyString = stream.conn.app + u.Path
@@ -311,12 +337,15 @@ func (stream *inboundStream) play() {
 		if f == nil {
 			continue
 		}
+		if f.IsCodec {
+			logger.Debugf("--->>> send codec data to client, len: %d", f.Len())
+		}
 		// TODO: get session status by err
-		// if err != nil {
-		// 	return
-		// }
+		if err != nil {
+			logger.Infof("client read packet return err: %s", err.Error())
+		}
 		// logger.Debugf("---- send data to client, type: %d, idx: %d, delta: %d", f.Type, f.Idx, f.Delta)
-		if err = stream.SendData(f.Type, f.Bytes(), f.Delta); err != nil {
+		if err = stream.SendPacket(f); err != nil {
 			logger.Errorf("send data return error: %s", err.Error())
 			return
 		}

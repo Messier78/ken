@@ -20,7 +20,7 @@ func init() {
 
 // Packet
 type Packet struct {
-	bytes.Buffer
+	*bytes.Buffer
 
 	Idx int64
 	// Packet Type as av type
@@ -38,9 +38,9 @@ func newPacket() *Packet {
 }
 
 func AcquirePacket() *Packet {
-	v, _ := pool.Get().(*Packet)
-	v.Reset()
-	return v
+	// v, _ := pool.Get().(*Packet)
+	// v.Reset()
+	return &Packet{Buffer: &bytes.Buffer{}}
 }
 
 func ReleasePacket(pkt *Packet) {
@@ -68,11 +68,15 @@ type packetReader struct {
 }
 
 // ReadPacket
-func (r *packetReader) ReadPacket() (*Packet, error) {
+func (r *packetReader) ReadPacket() (ff *Packet, err error) {
 	if r.idx < r.cache.StartIdx {
 		r.reset()
 	}
 	var f *Packet
+	defer func() {
+		ff = r.fixPacket(f)
+	}()
+
 	if r.node.next != nil {
 		f = r.node.f
 		r.node = r.node.next
@@ -90,6 +94,25 @@ func (r *packetReader) ReadPacket() (*Packet, error) {
 	f = r.node.f
 	r.node = r.node.next
 	return f, nil
+}
+
+// fixPacket
+// fix timestamp base on packetReader
+func (r *packetReader) fixPacket(f *Packet) *Packet {
+	if f == nil {
+		return nil
+	}
+	buf := bytes.NewBuffer(f.Buffer.Bytes())
+	ff := &Packet{
+		Buffer:  buf,
+		Idx:     f.Idx,
+		Type:    f.Type,
+		IsCodec: f.IsCodec,
+		Delta:   f.Delta,
+	}
+	ff.Timestamp = r.startTime + r.timestamp
+	r.timestamp += f.Delta
+	return ff
 }
 
 // reset

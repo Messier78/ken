@@ -110,22 +110,23 @@ func (s *Server) Handshake(c net.Conn) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = r.(error)
-			logger.Errorf("Server Handshake err: %s", err.Error())
+			logger.Errorf("Server Handshake err: %+v", errors.Wrap(err, "panic"))
 		}
 	}()
 	br := bufio.NewReader(c)
 	bw := bufio.NewWriter(c)
 	timeout := time.Duration(10) * time.Second
 	if err = SHandshake(c, br, bw, timeout); err != nil {
-		logger.Errorf("SHandshake err: %s", err.Error())
+		// logger.Errorf("SHandshake err: %s", err.Error())
+		logger.Errorf("%+v", errors.Wrap(err, "SHandshake"))
 		c.Close()
 		return
 	}
 
 	// if s.iManager != nil {
-	// _, err = s.iManager.NewInboundConn(s.ctx, c, br, bw, s.iManager, 100)
+	_, err = s.iManager.NewInboundConn(s.ctx, c, br, bw, s.iManager, 100)
 	// } else {
-	_, err = NewInboundConn(s.ctx, c, br, bw, s, 100)
+	// _, err = NewInboundConn(s.ctx, c, br, bw, s, 100)
 	// }
 	if err != nil {
 		logger.Debugf("%+v", errors.Wrap(err, "NewInboundConn"))

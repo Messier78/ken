@@ -8,7 +8,6 @@ import (
 	"net"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/pkg/errors"
 
@@ -31,9 +30,6 @@ type Conn interface {
 	SetPeerBandwidth(peerBandwidth uint32, limitType byte)
 	SetChunkSize(chunkSize uint32)
 	SendUserControlMessage(eventID uint16)
-
-	// for gop cache
-	Store(pkt *av.Packet) error
 }
 
 type ConnHandler interface {
@@ -107,15 +103,17 @@ type conn struct {
 
 func NewConn(ctx context.Context, c net.Conn, br *bufio.Reader, bw *bufio.Writer, handler ConnHandler, maxChannelNumber int) Conn {
 	conn := &conn{
-		highPriorityMessageQueue:    make(chan *Message, DEFAULT_HIGH_PRIORITY_BUFFER_SIZE),
-		highPriorityMessage:         nil,
-		highPriorityMessageOffset:   0,
-		middlePriorityMessageQueue:  make(chan *Message, DEFAULT_MIDDLE_PRIORITY_BUFFER_SIZE),
-		middlePriorityMessage:       nil,
-		middlePriorityMessageOffset: 0,
-		lowPriorityMessageQueue:     make(chan *Message, DEFAULT_LOW_PRIORITY_BUFFER_SIZE),
-		lowPriorityMessage:          nil,
-		lowPriorityMessageOffset:    0,
+		outChunkStreams: make(map[uint32]*OutboundChunkStream),
+		inChunkStreams:  make(map[uint32]*InboundChunkStream),
+		// highPriorityMessageQueue:    make(chan *Message, DEFAULT_HIGH_PRIORITY_BUFFER_SIZE),
+		// highPriorityMessage:         nil,
+		// highPriorityMessageOffset:   0,
+		// middlePriorityMessageQueue:  make(chan *Message, DEFAULT_MIDDLE_PRIORITY_BUFFER_SIZE),
+		// middlePriorityMessage:       nil,
+		// middlePriorityMessageOffset: 0,
+		// lowPriorityMessageQueue:     make(chan *Message, DEFAULT_LOW_PRIORITY_BUFFER_SIZE),
+		// lowPriorityMessage:          nil,
+		// lowPriorityMessageOffset:    0,
 		inChunkSize:                 DEFAULT_CHUNK_SIZE,
 		outChunkSize:                DEFAULT_CHUNK_SIZE,
 		outChunkSizeTemp:            0,
@@ -145,7 +143,7 @@ func NewConn(ctx context.Context, c net.Conn, br *bufio.Reader, bw *bufio.Writer
 	conn.outChunkStreams[CS_ID_COMMAND] = NewOutboundChunkStream(CS_ID_COMMAND)
 	// Create User control chunk stream
 	conn.outChunkStreams[CS_ID_USER_CONTROL] = NewOutboundChunkStream(CS_ID_USER_CONTROL)
-	go conn.sendLoop()
+	// go conn.sendLoop()
 	go conn.recvLoop()
 
 	return conn
@@ -158,17 +156,20 @@ func (conn *conn) Close() {
 }
 
 func (conn *conn) Send(msg *Message) error {
-	csiType := msg.ChunkStreamID % 6
-	if csiType == CS_ID_PROTOCOL_CONTROL || csiType == CS_ID_COMMAND {
-		conn.highPriorityMessageQueue <- msg
+	/*
+		csiType := msg.ChunkStreamID % 6
+		if csiType == CS_ID_PROTOCOL_CONTROL || csiType == CS_ID_COMMAND {
+			conn.highPriorityMessageQueue <- msg
+			return nil
+		}
+		if msg.Type == VIDEO_TYPE {
+			conn.lowPriorityMessageQueue <- msg
+			return nil
+		}
+		conn.middlePriorityMessageQueue <- msg
 		return nil
-	}
-	if msg.Type == VIDEO_TYPE {
-		conn.lowPriorityMessageQueue <- msg
-		return nil
-	}
-	conn.middlePriorityMessageQueue <- msg
-	return nil
+	*/
+	return conn.sendMessage(msg)
 }
 
 func (conn *conn) CreateChunkStream(id uint32) (*OutboundChunkStream, error) {
@@ -303,6 +304,7 @@ func (conn *conn) SendUserControlMessage(eventID uint16) {
 	conn.Send(msg)
 }
 
+/*
 func (conn *conn) sendLoop() {
 	defer func() {
 		if r := recover(); r != nil {
@@ -328,6 +330,7 @@ func (conn *conn) sendLoop() {
 		}
 	}
 }
+*/
 
 func (conn *conn) recvLoop() {
 	defer func() {
@@ -402,6 +405,7 @@ func (conn *conn) recvLoop() {
 			cs.lastHeader = header
 			absoluteTimestamp = cs.lastInAbsoluteTimestamp
 		}
+		// logger.Debugf("absolute timestamp: %d", absoluteTimestamp)
 
 		if msg == nil {
 			msg = &Message{
@@ -616,14 +620,15 @@ func (conn *conn) receivedCommand(msg *Message) (err error) {
 	return
 }
 
-func (conn *conn) sendMessage(msg *Message) {
-	var err error
+func (conn *conn) sendMessage(msg *Message) (err error) {
 	cs, ok := conn.outChunkStreams[msg.ChunkStreamID]
 	if !ok || cs == nil {
 		return
 	}
 
 	header := cs.NewOutboundHeader(msg)
+	// header := cs.NewFixedOutboundHeader(msg)
+	// logger.Debugf(">>> header.timestamp: %d, delta: %d", header.Timestamp, msg.Timestamp)
 	if _, err = header.Write(conn.bw); err != nil {
 		conn.error(err, "send message write header")
 		return
@@ -670,14 +675,18 @@ func (conn *conn) sendMessage(msg *Message) {
 		conn.outChunkSize = conn.outChunkSizeTemp
 		conn.outChunkSizeTemp = 0
 	}
+	// TODO: recycle msg
+	return
 }
 
+/*
 func (conn *conn) checkAndSendHighPriorityMessage() {
 	for len(conn.highPriorityMessageQueue) > 0 {
 		msg := <-conn.highPriorityMessageQueue
 		conn.sendMessage(msg)
 	}
 }
+*/
 
 func (conn *conn) invokeSetChunkSize(msg *Message) {
 	if err := binary.Read(msg.Buf, binary.BigEndian, &conn.inChunkSize); err != nil {
@@ -775,9 +784,4 @@ func (conn *conn) invokeSetPeerBandwidth(msg *Message) {
 func (conn *conn) invokeCommand(cmd *Command) {
 	logger.Debugf("conn::invokeCommand() ==> %s", cmd.Name)
 	conn.handler.OnReceivedRtmpCommand(conn, cmd)
-}
-
-// for gop
-func (conn *conn) Store(pkt *av.Packet) error {
-	return nil
 }

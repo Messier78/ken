@@ -73,9 +73,17 @@ func New(tag string, level zapcore.Level) *zap.SugaredLogger {
 	}
 
 	atomicLevel.SetLevel(level)
+	var syncer zapcore.WriteSyncer
+	if level == zapcore.DebugLevel {
+		syncer = zapcore.NewMultiWriteSyncer(zapcore.AddSync(os.Stdout),
+			zapcore.AddSync(hookNormal))
+	} else {
+		syncer = zapcore.AddSync(hookNormal)
+	}
 	core := zapcore.NewCore(
 		zapcore.NewConsoleEncoder(*encoderConf),
-		zapcore.AddSync(hookNormal),
+		// zapcore.AddSync(hookNormal),
+		syncer,
 		atomicLevel,
 	)
 
