@@ -6,18 +6,6 @@ import (
 	"sync"
 )
 
-var (
-	pool *sync.Pool
-)
-
-func init() {
-	pool = &sync.Pool{
-		New: func() interface{} {
-			return newPacket()
-		},
-	}
-}
-
 // Packet
 type Packet struct {
 	*bytes.Buffer
@@ -44,12 +32,11 @@ func AcquirePacket() *Packet {
 }
 
 func ReleasePacket(pkt *Packet) {
-	pool.Put(pkt)
 }
 
 // PacketReader
 type PacketReader interface {
-	ReadPacket() (f *Packet, err error)
+	ReadPacket(ff *Packet) error
 }
 
 type packetReader struct {
@@ -68,19 +55,19 @@ type packetReader struct {
 }
 
 // ReadPacket
-func (r *packetReader) ReadPacket() (ff *Packet, err error) {
+func (r *packetReader) ReadPacket(ff *Packet) (err error) {
 	if r.idx < r.cache.StartIdx {
 		r.reset()
 	}
 	var f *Packet
 	defer func() {
-		ff = r.fixPacket(f)
+		r.fixPacket(f, ff)
 	}()
 
 	if r.node.next != nil {
 		f = r.node.f
 		r.node = r.node.next
-		return f, nil
+		return nil
 	}
 
 	r.cond.L.Lock()
@@ -89,30 +76,28 @@ func (r *packetReader) ReadPacket() (ff *Packet, err error) {
 
 	if r.node.next == nil {
 		// TODO: return session status
-		return nil, io.EOF
+		return io.EOF
 	}
 	f = r.node.f
 	r.node = r.node.next
-	return f, nil
+	return nil
 }
 
 // fixPacket
 // fix timestamp base on packetReader
-func (r *packetReader) fixPacket(f *Packet) *Packet {
+func (r *packetReader) fixPacket(f *Packet, ff *Packet) {
 	if f == nil {
-		return nil
+		ff.Buffer = nil
+		return
 	}
-	buf := bytes.NewBuffer(f.Buffer.Bytes())
-	ff := &Packet{
-		Buffer:  buf,
-		Idx:     f.Idx,
-		Type:    f.Type,
-		IsCodec: f.IsCodec,
-		Delta:   f.Delta,
-	}
+
+	ff.Buffer = bytes.NewBuffer(f.Buffer.Bytes())
+	ff.Idx = f.Idx
+	ff.Type = f.Type
+	ff.IsCodec = f.IsCodec
+	ff.Delta = f.Delta
 	ff.Timestamp = r.startTime + r.timestamp
 	r.timestamp += f.Delta
-	return ff
 }
 
 // reset

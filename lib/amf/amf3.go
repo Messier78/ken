@@ -8,7 +8,7 @@ import (
 	"sort"
 )
 
-//-----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // AMF3 Write functions
 func AMF3_WriteU29(w Writer, n uint32) (num int, err error) {
 	if n <= 0x0000007F {
@@ -51,7 +51,7 @@ func AMF3_WriteUTF8(w Writer, str string) (num int, err error) {
 			return 1, nil
 		}
 	}
-	u := uint32((length << 1) | 0x01) // Todo: reference
+	u := uint32((length << 1) | 0x01)
 	n, err := AMF3_WriteU29(w, u)
 	if err != nil {
 		return 0, err
@@ -184,7 +184,7 @@ func AMF3_WriteValue(w Writer, value interface{}) (n int, err error) {
 			}
 			b := v.Bytes()
 			length := len(b)
-			u := uint32((length << 1) | 0x01) // Todo: reference
+			u := uint32((length << 1) | 0x01)
 			var m int
 			m, err = AMF3_WriteU29(w, u)
 			if err != nil {
@@ -206,7 +206,7 @@ func AMF3_WriteValue(w Writer, value interface{}) (n int, err error) {
 			}
 			// Write dense array length
 			length := v.Len()
-			u := uint32((length << 1) | 0x01) // Todo: reference
+			u := uint32((length << 1) | 0x01)
 			var m int
 			m, err = AMF3_WriteU29(w, u)
 			if err != nil {
@@ -280,7 +280,7 @@ func AMF3_WriteValue(w Writer, value interface{}) (n int, err error) {
 	return 0, errors.New("Unsupported type")
 }
 
-//-----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // AMF3 Read functions
 func AMF3_ReadU29(r Reader) (n uint32, err error) {
 	var b byte
@@ -309,7 +309,6 @@ func AMF3_ReadUTF8(r Reader) (string, error) {
 		return "", err
 	}
 	if length&uint32(0x01) != uint32(1) {
-		// Todo: reference
 		return "", errors.New("AMF3 reference unsupported")
 	}
 	length = length >> 1

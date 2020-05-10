@@ -189,6 +189,7 @@ func (iconn *inboundConn) onCreateStream(cmd *Command) {
 	stream := &inboundStream{
 		conn:          iconn,
 		chunkStreamID: cs.ID,
+		f:             av.AcquirePacket(),
 		closed:        false,
 	}
 	stream.ctx, stream.cancel = context.WithCancel(iconn.ctx)

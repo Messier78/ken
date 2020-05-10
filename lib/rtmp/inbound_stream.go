@@ -44,6 +44,7 @@ type inboundStream struct {
 	s *av.Session
 	w av.PacketWriter
 	r av.PacketReader
+	f *av.Packet
 
 	isPublisher bool
 	idx         int64
@@ -330,22 +331,21 @@ func (stream *inboundStream) play() {
 			logger.Errorf(">>>>>>>>>>>>>>>>>>>>>>> packet reader is nil")
 		}
 	}
-	var f *av.Packet
 	var err error
 	for !stream.closed {
-		f, err = stream.r.ReadPacket()
-		if f == nil {
+		err = stream.r.ReadPacket(stream.f)
+		if stream.f.Buffer == nil {
 			continue
 		}
-		if f.IsCodec {
-			logger.Debugf("--->>> send codec data to client, len: %d", f.Len())
-		}
+		// if f.IsCodec {
+		// 	logger.Debugf("--->>> send codec data to client, len: %d", f.Len())
+		// }
 		// TODO: get session status by err
 		if err != nil {
 			logger.Infof("client read packet return err: %s", err.Error())
 		}
 		// logger.Debugf("---- send data to client, type: %d, idx: %d, delta: %d", f.Type, f.Idx, f.Delta)
-		if err = stream.SendPacket(f); err != nil {
+		if err = stream.SendPacket(stream.f); err != nil {
 			logger.Errorf("send data return error: %s", err.Error())
 			return
 		}
