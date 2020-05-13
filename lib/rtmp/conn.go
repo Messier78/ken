@@ -284,7 +284,7 @@ func (conn *conn) SetPeerBandwidth(peerBandwidth uint32, limitType byte) {
 }
 
 func (conn *conn) SetChunkSize(size uint32) {
-	logger.Debugf("SetChunkSize, size: %d", size)
+	logger.Debugf("Set out chunk size, size: %d", size)
 	msg := NewMessage(CS_ID_PROTOCOL_CONTROL, SET_CHUNK_SIZE, 0, 0, nil)
 	if err := binary.Write(msg.Buf, binary.BigEndian, &size); err != nil {
 		logger.Errorf("SetChunkSize write size err: %s", err.Error())
@@ -300,6 +300,10 @@ func (conn *conn) SendUserControlMessage(eventID uint16) {
 	if err := binary.Write(msg.Buf, binary.BigEndian, &eventID); err != nil {
 		logger.Errorf("sendUserControlMessage write event type USER_CONTROL_MESSAGE err: %s", err.Error())
 		return
+	}
+	var temp uint32
+	temp = 0
+	if err := binary.Write(msg.Buf, binary.BigEndian, &temp); err != nil {
 	}
 	conn.Send(msg)
 }
@@ -476,7 +480,7 @@ func (conn *conn) recvLoop() {
 }
 
 func (conn *conn) error(err error, desc string) {
-	logger.Errorf("%+v", errors.Wrap(err, desc))
+	// logger.Errorf("%+v", errors.Wrap(err, desc))
 	if conn.err != nil {
 		conn.err = err
 	}
@@ -628,7 +632,7 @@ func (conn *conn) sendMessage(msg *Message) (err error) {
 
 	header := cs.NewOutboundHeader(msg)
 	// header := cs.NewFixedOutboundHeader(msg)
-	// logger.Debugf(">>> header.timestamp: %d, delta: %d", header.Timestamp, msg.Timestamp)
+	// logger.Debugf(">>> header.timestamp: %d, delta: %d, chunksize: %d", header.Timestamp, msg.Timestamp, conn.outChunkSize)
 	if _, err = header.Write(conn.bw); err != nil {
 		conn.error(err, "send message write header")
 		return
@@ -672,6 +676,7 @@ func (conn *conn) sendMessage(msg *Message) (err error) {
 		return
 	}
 	if msg.ChunkStreamID == CS_ID_PROTOCOL_CONTROL && msg.Type == SET_CHUNK_SIZE && conn.outChunkSizeTemp != 0 {
+		logger.Infof("set out chunk size: %d", conn.outChunkSizeTemp)
 		conn.outChunkSize = conn.outChunkSizeTemp
 		conn.outChunkSizeTemp = 0
 	}

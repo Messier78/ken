@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/pkg/errors"
+	"go.uber.org/zap/zapcore"
 )
 
 type ServerHandler interface {
@@ -31,6 +32,7 @@ type Server struct {
 
 // NewServer
 func NewServer(ctx context.Context, network, bindAddress string) (*Server, error) {
+	InitLog(zapcore.DebugLevel)
 	server := &Server{
 		network:     network,
 		bindAddress: bindAddress,
@@ -53,6 +55,7 @@ func NewServer(ctx context.Context, network, bindAddress string) (*Server, error
 
 // StartServer
 func StartServer(ctx context.Context, network, bindAddress string) error {
+	InitLog(zapcore.DebugLevel)
 	server := &Server{
 		network:     network,
 		bindAddress: bindAddress,

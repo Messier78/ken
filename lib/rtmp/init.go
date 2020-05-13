@@ -1,6 +1,8 @@
 package rtmp
 
 import (
+	"sync"
+
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 
@@ -8,10 +10,13 @@ import (
 )
 
 var (
-	logger *zap.SugaredLogger
+	logger  *zap.SugaredLogger
+	logOnce sync.Once
 )
 
-func init() {
-	logger = log.New("rtmp", zapcore.DebugLevel)
-	logger = logger.Desugar().WithOptions(zap.AddCaller()).Sugar()
+func InitLog(level zapcore.Level) {
+	logOnce.Do(func() {
+		logger = log.New("rtmp", level)
+		logger = logger.Desugar().WithOptions(zap.AddCaller()).Sugar()
+	})
 }

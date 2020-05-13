@@ -22,3 +22,9 @@ go build -ldflags "${LDFLAGS}" -o "${DIR}/bin/ken" .
 if [ a"$1" = "arun" ]; then
   ${DIR}/bin/ken server start
 fi
+
+if [ a"$1" = "alinux" ]; then
+  GOOS=linux GOARCH=amd64 go build -ldflags "${LDFLAGS}" -o "${DIR}/bin/ken" .
+  rm /usr/local/share/nginx/build/ken
+  mv ${DIR}/bin/ken /usr/local/share/nginx/build/
+fi

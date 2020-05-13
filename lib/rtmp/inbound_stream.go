@@ -6,6 +6,8 @@ import (
 	"net/url"
 	"strconv"
 
+	"github.com/pkg/errors"
+
 	"ken/lib/amf"
 	"ken/lib/av"
 )
@@ -41,10 +43,11 @@ type inboundStream struct {
 	chunkStreamID uint32
 	bufferLength  uint32
 
-	s *av.Session
-	w av.PacketWriter
-	r av.PacketReader
-	f *av.Packet
+	s       *av.Session
+	w       av.PacketWriter
+	r       av.PacketReader
+	f       *av.Packet
+	metaObj amf.Object
 
 	isPublisher bool
 	idx         int64
@@ -83,16 +86,48 @@ func (stream *inboundStream) Close() {
 
 func (stream *inboundStream) Received(msg *Message) bool {
 	if msg.Type == VIDEO_TYPE || msg.Type == AUDIO_TYPE {
-		if stream.w == nil {
-			stream.w, _ = stream.s.NewWriter(stream.genID)
-		}
-		// TODO: codec
+		// if stream.w == nil {
+		// 	stream.w, _ = stream.s.NewWriter(stream.genID)
+		// }
 		msg.Buf.Type = msg.Type
 		msg.Buf.Delta = msg.Timestamp
 		stream.w.WritePacket(CodecPacket(stream, msg.Buf))
 		return true
 	}
+	if msg.Type == DATA_AMF0 {
+		if stream.w == nil {
+			stream.w, _ = stream.s.NewWriter(stream.genID)
+		}
+		msg.Buf.IsMeta = true
+		stream.w.WritePacket(msg.Buf)
+		return true
+	}
 	var err error
+	/*
+		if msg.Type == DATA_AMF0 || msg.Type == DATA_AMF3 {
+			logger.Infof(">>>> meta received...")
+			var obj interface{}
+			for msg.Buf.Len() > 0 {
+				if obj, err = amf.ReadValue(msg.Buf); err == nil {
+					switch obj.(type) {
+					case string:
+						logger.Infof("--- string: %s", obj.(string))
+					case amf.Object:
+						logger.Infof("--- Object")
+						for k, v := range obj.(amf.Object) {
+							logger.Infof("----- %s - %v", k, v)
+						}
+						stream.metaObj = obj.(amf.Object)
+					}
+				} else {
+					logger.Errorf("read meta failed, err: %s", err.Error())
+					return true
+				}
+			}
+
+			return true
+		} else
+	*/
 	if msg.Type == COMMAND_AMF0 || msg.Type == COMMAND_AMF3 {
 		cmd := &Command{}
 		if msg.Type == COMMAND_AMF3 {
@@ -251,6 +286,9 @@ func (stream *inboundStream) onPublish(cmd *Command) bool {
 	stream.genID, _ = strconv.Atoi(u.Query().Get("genId"))
 	stream.isPublisher = true
 	stream.s = av.AttachToSession(stream.keyString)
+	if stream.w == nil {
+		stream.w, _ = stream.s.NewWriter(stream.genID)
+	}
 
 	stream.startPublish()
 	return true
@@ -266,6 +304,10 @@ func (stream *inboundStream) onReceiveVideo(cmd *Command) bool {
 }
 
 func (stream *inboundStream) onDeleteStream(cmd *Command) bool {
+	if stream.w != nil {
+		stream.w.Close()
+		stream.w = nil
+	}
 	stream.closed = true
 	stream.cancel()
 	logger.Debugf(">> onDeleteStream, key: %s", stream.keyString)
@@ -325,6 +367,11 @@ func (stream *inboundStream) startPlay() {
 }
 
 func (stream *inboundStream) play() {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Errorf("%+v", errors.Wrapf(r.(error), "panic while stream[%s] playing", stream.keyString))
+		}
+	}()
 	if stream.r == nil {
 		stream.r = stream.s.NewReader()
 		if stream.r == nil {
@@ -337,14 +384,20 @@ func (stream *inboundStream) play() {
 		if stream.f.Buffer == nil {
 			continue
 		}
-		// if f.IsCodec {
-		// 	logger.Debugf("--->>> send codec data to client, len: %d", f.Len())
-		// }
+		if stream.f.IsMeta {
+			if err = stream.onMetaData(stream.f); err != nil {
+				logger.Errorf("send meta return error: %s", err.Error())
+				return
+			}
+		}
+		if stream.f.IsCodec {
+			logger.Debugf("--->>> send codec data to client, len: %d", stream.f.Len())
+		}
 		// TODO: get session status by err
 		if err != nil {
 			logger.Infof("client read packet return err: %s", err.Error())
 		}
-		// logger.Debugf("---- send data to client, type: %d, idx: %d, delta: %d", f.Type, f.Idx, f.Delta)
+		// logger.Debugf("---- send data to client, type: %d, idx: %d, delta: %d, length: %d", stream.f.Type, stream.f.Idx, stream.f.Delta, stream.f.Len())
 		if err = stream.SendPacket(stream.f); err != nil {
 			logger.Errorf("send data return error: %s", err.Error())
 			return
@@ -384,6 +437,16 @@ func (stream *inboundStream) rtmpSampleAccess() {
 	amf.WriteBoolean(msg.Buf, false)
 	amf.WriteBoolean(msg.Buf, false)
 	stream.conn.conn.Send(msg)
+}
+
+func (stream *inboundStream) onMetaData(f *av.Packet) error {
+	logger.Infof(">>>> send meta data")
+	msg := &Message{
+		ChunkStreamID: CS_ID_USER_CONTROL,
+		Type:          DATA_AMF0,
+		Buf:           f,
+	}
+	return stream.conn.conn.Send(msg)
 }
 
 // //////////////////////////////////////////////////////////////////////

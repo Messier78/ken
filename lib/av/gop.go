@@ -39,7 +39,7 @@ func (g *gop) Write(f *Packet) {
 }
 
 func (g *gop) WriteInNewGop(f *Packet, idx int64) *gop {
-	logger.Debugf("Write in new gop, start idx: %d", idx)
+	// logger.Debugf("Write in new gop, start idx: %d", idx)
 	ng := &gop{
 		timestamp: f.Timestamp,
 		idx:       idx,

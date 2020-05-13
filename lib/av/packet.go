@@ -69,10 +69,14 @@ func (r *packetReader) ReadPacket(ff *Packet) (err error) {
 		r.node = r.node.next
 		return nil
 	}
+	// TODO: 如果发的太快，客户端缓存了很长时间的数据，
+	// 会导致延迟一直很高，可以计算客户端还能播放多长时间，
+	// 在这里sleep
 
 	r.cond.L.Lock()
-	defer r.cond.L.Unlock()
 	r.cond.Wait()
+	r.cond.L.Unlock()
+	// time.Sleep(40 * time.Millisecond)
 
 	if r.node.next == nil {
 		// TODO: return session status
@@ -95,6 +99,7 @@ func (r *packetReader) fixPacket(f *Packet, ff *Packet) {
 	ff.Idx = f.Idx
 	ff.Type = f.Type
 	ff.IsCodec = f.IsCodec
+	ff.IsMeta = f.IsMeta
 	ff.Delta = f.Delta
 	ff.Timestamp = r.startTime + r.timestamp
 	r.timestamp += f.Delta
@@ -142,6 +147,7 @@ type Writer interface {
 }
 
 type packetWriter struct {
+	idx     int64
 	genID   int
 	cache   *Cache
 	handler Writer
@@ -154,6 +160,8 @@ type packetWriter struct {
 }
 
 func (w *packetWriter) WritePacket(f *Packet) error {
+	w.swapLocker.Lock()
+	defer w.swapLocker.Unlock()
 	// store packet into ring in case stream overflowed
 	w.r.Value = f
 	if f.IsCodec {
@@ -166,16 +174,15 @@ func (w *packetWriter) WritePacket(f *Packet) error {
 		w.lastKeyFrame = w.r
 	}
 
-	w.swapLocker.Lock()
-	defer w.swapLocker.Unlock()
 	w.handler.Write(f)
 	w.r = w.r.Next()
 	return nil
 }
 
 // Write
-// packet stored by WritePacket, do nothing
 func (w *packetWriter) Write(f *Packet) {
+	f.Idx = w.idx + 1
+	w.idx++
 }
 
 func (w *packetWriter) Close() {

@@ -18,9 +18,10 @@ func init() {
 }
 
 func Start() error {
-	g.Go(func() error {
-		return rtmp.StartServer(ctx, "tcp", "localhost:1935")
-	})
+	// g.Go(func() error {
+	return rtmp.StartServer(ctx, "tcp", "0.0.0.0:1935")
+	// return rtmp.StartServer(ctx, "tcp", "localhost:1935")
+	// })
 
-	return g.Wait()
+	// return g.Wait()
 }

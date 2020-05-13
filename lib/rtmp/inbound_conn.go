@@ -171,7 +171,7 @@ func (iconn *inboundConn) onConnect(cmd *Command) error {
 	if iconn.authHandler.OnConnectAuth(iconn, cmd) {
 		iconn.conn.SetWindowAcknowledgementSize()
 		iconn.conn.SetPeerBandwidth(250000, SET_PEER_BANDWIDTH_DYNAMIC)
-		iconn.conn.SetChunkSize(4096)
+		iconn.conn.SetChunkSize(DEFAULT_CHUNK_SIZE)
 		err = iconn.sendConnectSucceededResult(cmd)
 	} else {
 		err = iconn.sendConnectErrorResult(cmd)

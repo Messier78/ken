@@ -12,4 +12,4 @@ require (
 	gopkg.in/natefinch/lumberjack.v2 v2.0.0
 )
 
-replace github.com/scythefly/orb => /Users/iuz/work/go/src/github.com/scythefly/orb
+replace github.com/scythefly/orb => ../pkg/orb
