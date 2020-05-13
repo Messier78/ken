@@ -8,6 +8,7 @@ import (
 	"github.com/pkg/errors"
 )
 
+// TODO: drop codec
 type Cache struct {
 	// Idx++ when a packet written
 	Idx int64
@@ -51,6 +52,8 @@ type Cache struct {
 	informationCnt    uint32
 
 	keyString string
+	errStatus error
+	conf      *Config
 }
 
 func NewCache() *Cache {
@@ -65,12 +68,19 @@ func NewCache() *Cache {
 		gPos: &gop{
 			idx:       0,
 			nodeStart: &pktNode{},
-			duration:  conf.AudioOnlyGopDuration + 1,
 		},
 		writerSwapLocker: &sync.RWMutex{},
 		writers:          make(map[int]*packetWriter),
 		cond:             sync.NewCond(&sync.Mutex{}),
+		conf: &Config{
+			AudioOnlyGopDuration: 5000,
+			DelayTime:            3000,
+			RingSize:             1024,
+			SessionTimeout:       60,
+			Sync:                 300,
+		},
 	}
+	c.gPos.duration = c.conf.AudioOnlyGopDuration + 1
 	c.codecNode = c.codecNodeStart
 	c.metaNode = c.metaNodeStart
 	c.gPos.node = c.gPos.nodeStart
@@ -118,7 +128,7 @@ func (c *Cache) Write(f *Packet) {
 	if c.AudioOnly && !f.IsKeyFrame {
 		if f.Type == AUDIO_TYPE {
 			f.Idx = c.Idx + 1
-			if c.gPos.duration > conf.AudioOnlyGopDuration {
+			if c.gPos.duration > c.conf.AudioOnlyGopDuration {
 				c.LatestTimestamp += c.gPos.duration
 				c.gPos = c.gPos.WriteInNewGop(f, c.Idx+1)
 				c.swapGopStart()
@@ -152,13 +162,12 @@ func (c *Cache) swapGopStart() {
 	// keep the latest gop always
 	gpos := c.gPos.prev
 	for ; pos != gpos && pos != gpos.prev; pos = pos.next {
-		if pos.timestamp+conf.DelayTime < c.LatestTimestamp {
+		if pos.timestamp+c.conf.DelayTime < c.LatestTimestamp {
 			// logger.Debugf("---------- drop gop, idx: %d", pos.idx)
 			pos.next.prev = nil
 			c.gopStart = pos.next
 		}
 	}
-	// TODO: drop codec
 }
 
 // NewPacketWriter returns a PacketWriter interface that implements
@@ -174,7 +183,7 @@ func (c *Cache) NewPacketWriter(genID int) (PacketWriter, error) {
 	logger.Infof("new writer with genId %d", genID)
 	w := &packetWriter{
 		genID:      genID,
-		r:          newPacketRing(conf.RingSize),
+		r:          newPacketRing(c.conf.RingSize),
 		swapLocker: c.writerSwapLocker.RLocker(),
 	}
 	c.writers[genID] = w
@@ -201,7 +210,7 @@ func (c *Cache) ClosePacketWriter(w *packetWriter) {
 	defer c.writerSwapLocker.Unlock()
 	genID := w.genID
 	delete(c.writers, genID)
-	// TODO: swap writer
+	// swap writer
 	if c.genID == genID {
 		c.w = nil
 		var w *packetWriter
@@ -256,17 +265,8 @@ func (c *Cache) NewPacketReader() PacketReader {
 	if r.node == nil {
 		return nil
 	}
-	/*
-		node := r.node
-		for i := 0; i < 5; i++ {
-			logger.Debugf("||||---- frame idx: %d", node.f.Idx)
-			if node.next != nil {
-				node = node.next
-			} else {
-				break
-			}
-		}
-	*/
+	r.startSysTime = time.Now()
+
 	return r
 }
 
@@ -286,6 +286,7 @@ func (c *Cache) getStartNode() (*pktNode, uint32) {
 	if pos.idx < 1 {
 		pos = pos.next
 	}
+	// link the latest meta/avc/aac packet to reader
 	var avc, aac, meta *Packet
 	node := c.metaNodeStart
 	for node != nil {
@@ -317,21 +318,21 @@ func (c *Cache) getStartNode() (*pktNode, uint32) {
 		pnode.next = &pktNode{
 			f: meta,
 		}
-		logger.Debugf(">>> link meta, idx: %d, len: %d", meta.Idx, meta.Len())
+		// logger.Debugf(">>> link meta, idx: %d, len: %d", meta.Idx, meta.Len())
 		pnode = pnode.next
 	}
 	if avc != nil {
 		pnode.next = &pktNode{
 			f: avc,
 		}
-		logger.Debugf(">>> link AVC, idx: %d, len: %d", avc.Idx, avc.Len())
+		// logger.Debugf(">>> link AVC, idx: %d, len: %d", avc.Idx, avc.Len())
 		pnode = pnode.next
 	}
 	if aac != nil {
 		pnode.next = &pktNode{
 			f: aac,
 		}
-		logger.Debugf(">>> link AAC, idx: %d, len: %d", aac.Idx, aac.Len())
+		// logger.Debugf(">>> link AAC, idx: %d, len: %d", aac.Idx, aac.Len())
 		pnode = pnode.next
 	}
 	pnode.next = &pktNode{
@@ -354,7 +355,7 @@ func (c *Cache) monitor() {
 		select {
 		case <-time.After(time.Second):
 			c.noDataReceivedCnt++
-			if c.noDataReceivedCnt > conf.DropIdleWriter {
+			if c.noDataReceivedCnt > c.conf.DropIdleWriter {
 			}
 			c.informationCnt++
 			if c.informationCnt > 4 {

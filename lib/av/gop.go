@@ -2,6 +2,8 @@
 // a list of frames begin with key frame
 package av
 
+// TODO: recycle gop struct
+
 // |-----|    |-----|    |-----|    |-----|
 // | gop | -> | gop | -> | gop | -> | gop |
 // |-----|    |-----|    |-----|    |-----|

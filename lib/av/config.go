@@ -1,11 +1,19 @@
 // config
 package av
 
+import "time"
+
 type Config struct {
 	// millisecond
 	AudioOnlyGopDuration uint32
 	// DelayTime
 	DelayTime uint32
+	// LowLatency
+	// if true, reader will reset node to the latest key frame
+	LowLatency bool
+	// maximum duration that a player can cache
+	// player will sleep 500ms if so many frames were sent
+	ClientDuration time.Duration
 	// RingSize
 	RingSize int
 	// SessionTimeout (s)

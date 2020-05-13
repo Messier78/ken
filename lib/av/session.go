@@ -12,48 +12,38 @@ var (
 func init() {
 	sessionPool = &sync.Pool{
 		New: func() interface{} {
-			return newSession()
+			return newStream()
 		},
 	}
 }
 
-type Session struct {
+type Stream struct {
+	*Cache
 	key string
-
-	gop *Cache
 }
 
-func newSession() *Session {
-	return &Session{
-		gop: NewCache(),
+func newStream() *Stream {
+	return &Stream{
+		Cache: NewCache(),
 	}
 }
 
-func AttachToSession(key string) *Session {
+func AttachToStream(key string) *Stream {
 	ss := sessionPool.Get()
 	v, ok := sessions.LoadOrStore(key, sessionPool.Get())
 	if ok {
 		sessionPool.Put(ss)
 	} else {
-		v.(*Session).gop.SetID(key)
+		v.(*Stream).SetID(key)
 	}
-	s := v.(*Session)
+	s := v.(*Stream)
 	s.key = key
 	return s
 }
 
-func (s *Session) Reset() {
-	// TODO:
+func (s *Stream) Reset() {
 }
 
-func (s *Session) Idx() int64 {
-	return s.gop.Idx
-}
-
-func (s *Session) NewWriter(genID int) (PacketWriter, error) {
-	return s.gop.NewPacketWriter(genID)
-}
-
-func (s *Session) NewReader() PacketReader {
-	return s.gop.NewPacketReader()
+func (s *Stream) Idx() int64 {
+	return s.Cache.Idx
 }

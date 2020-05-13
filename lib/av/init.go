@@ -12,18 +12,7 @@ import (
 var (
 	logger  *zap.SugaredLogger
 	logOnce sync.Once
-	conf    *Config
 )
-
-func init() {
-	conf = &Config{
-		AudioOnlyGopDuration: 5000,
-		DelayTime:            3000,
-		RingSize:             1024,
-		SessionTimeout:       60,
-		Sync:                 300,
-	}
-}
 
 func InitLog(level zapcore.Level) {
 	logOnce.Do(func() {

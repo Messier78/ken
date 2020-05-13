@@ -43,7 +43,7 @@ type inboundStream struct {
 	chunkStreamID uint32
 	bufferLength  uint32
 
-	s       *av.Session
+	s       *av.Stream
 	w       av.PacketWriter
 	r       av.PacketReader
 	f       *av.Packet
@@ -87,7 +87,7 @@ func (stream *inboundStream) Close() {
 func (stream *inboundStream) Received(msg *Message) bool {
 	if msg.Type == VIDEO_TYPE || msg.Type == AUDIO_TYPE {
 		// if stream.w == nil {
-		// 	stream.w, _ = stream.s.NewWriter(stream.genID)
+		// 	stream.w, _ = stream.s.NewPacketWriter(stream.genID)
 		// }
 		msg.Buf.Type = msg.Type
 		msg.Buf.Delta = msg.Timestamp
@@ -96,38 +96,13 @@ func (stream *inboundStream) Received(msg *Message) bool {
 	}
 	if msg.Type == DATA_AMF0 {
 		if stream.w == nil {
-			stream.w, _ = stream.s.NewWriter(stream.genID)
+			stream.w, _ = stream.s.NewPacketWriter(stream.genID)
 		}
 		msg.Buf.IsMeta = true
 		stream.w.WritePacket(msg.Buf)
 		return true
 	}
 	var err error
-	/*
-		if msg.Type == DATA_AMF0 || msg.Type == DATA_AMF3 {
-			logger.Infof(">>>> meta received...")
-			var obj interface{}
-			for msg.Buf.Len() > 0 {
-				if obj, err = amf.ReadValue(msg.Buf); err == nil {
-					switch obj.(type) {
-					case string:
-						logger.Infof("--- string: %s", obj.(string))
-					case amf.Object:
-						logger.Infof("--- Object")
-						for k, v := range obj.(amf.Object) {
-							logger.Infof("----- %s - %v", k, v)
-						}
-						stream.metaObj = obj.(amf.Object)
-					}
-				} else {
-					logger.Errorf("read meta failed, err: %s", err.Error())
-					return true
-				}
-			}
-
-			return true
-		} else
-	*/
 	if msg.Type == COMMAND_AMF0 || msg.Type == COMMAND_AMF3 {
 		cmd := &Command{}
 		if msg.Type == COMMAND_AMF3 {
@@ -248,8 +223,8 @@ func (stream *inboundStream) onPlay(cmd *Command) bool {
 	}
 	stream.keyString = stream.conn.app + u.Path
 	logger.Debugf("inboundStream::onPlay, key: %s", stream.keyString)
-	stream.s = av.AttachToSession(stream.keyString)
-	if stream.r = stream.s.NewReader(); stream.r == nil {
+	stream.s = av.AttachToStream(stream.keyString)
+	if stream.r = stream.s.NewPacketReader(); stream.r == nil {
 		logger.Debugf("cannot get session reader!!!!!")
 		return false
 	}
@@ -285,9 +260,9 @@ func (stream *inboundStream) onPublish(cmd *Command) bool {
 	stream.keyString = stream.conn.app + u.Path
 	stream.genID, _ = strconv.Atoi(u.Query().Get("genId"))
 	stream.isPublisher = true
-	stream.s = av.AttachToSession(stream.keyString)
+	stream.s = av.AttachToStream(stream.keyString)
 	if stream.w == nil {
-		stream.w, _ = stream.s.NewWriter(stream.genID)
+		stream.w, _ = stream.s.NewPacketWriter(stream.genID)
 	}
 
 	stream.startPublish()
@@ -373,7 +348,7 @@ func (stream *inboundStream) play() {
 		}
 	}()
 	if stream.r == nil {
-		stream.r = stream.s.NewReader()
+		stream.r = stream.s.NewPacketReader()
 		if stream.r == nil {
 			logger.Errorf(">>>>>>>>>>>>>>>>>>>>>>> packet reader is nil")
 		}

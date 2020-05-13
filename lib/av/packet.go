@@ -2,8 +2,8 @@ package av
 
 import (
 	"bytes"
-	"io"
 	"sync"
+	"time"
 )
 
 // Packet
@@ -47,7 +47,10 @@ type packetReader struct {
 	metaVersion  uint32
 	// timestamp of this reader has been played
 	timestamp uint32
+	// absoulte timestamp of the first frame
 	startTime uint32
+	//
+	startSysTime time.Time
 
 	cache *Cache
 	node  *pktNode
@@ -62,6 +65,10 @@ func (r *packetReader) ReadPacket(ff *Packet) (err error) {
 	var f *Packet
 	defer func() {
 		r.fixPacket(f, ff)
+		t := r.startSysTime.Add(time.Duration(r.timestamp) * time.Millisecond)
+		if t.After(time.Now().Add(r.cache.conf.ClientDuration)) {
+			time.Sleep(500 * time.Millisecond)
+		}
 	}()
 
 	if r.node.next != nil {
@@ -69,9 +76,6 @@ func (r *packetReader) ReadPacket(ff *Packet) (err error) {
 		r.node = r.node.next
 		return nil
 	}
-	// TODO: 如果发的太快，客户端缓存了很长时间的数据，
-	// 会导致延迟一直很高，可以计算客户端还能播放多长时间，
-	// 在这里sleep
 
 	r.cond.L.Lock()
 	r.cond.Wait()
@@ -79,8 +83,7 @@ func (r *packetReader) ReadPacket(ff *Packet) (err error) {
 	// time.Sleep(40 * time.Millisecond)
 
 	if r.node.next == nil {
-		// TODO: return session status
-		return io.EOF
+		return r.cache.errStatus
 	}
 	f = r.node.f
 	r.node = r.node.next
@@ -123,7 +126,7 @@ func (r *packetReader) reset() {
 		if node.f.IsKeyFrame {
 			lastKeyNode = node
 		}
-		if node.f.Timestamp+conf.DelayTime > ts {
+		if node.f.Timestamp+r.cache.conf.DelayTime > ts {
 			// only if the publisher is AUDIO ONLY
 			if lastKeyNode == nil {
 				lastKeyNode = node

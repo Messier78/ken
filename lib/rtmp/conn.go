@@ -339,6 +339,7 @@ func (conn *conn) sendLoop() {
 func (conn *conn) recvLoop() {
 	defer func() {
 		if r := recover(); r != nil {
+			logger.Errorf("panic error: %s", r.(error).Error())
 			if conn.err == nil {
 				conn.err = r.(error)
 			}
