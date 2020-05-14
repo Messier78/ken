@@ -1,7 +1,6 @@
 package log
 
 import (
-	"fmt"
 	"os"
 	"path"
 	"path/filepath"
@@ -12,12 +11,12 @@ import (
 	"go.uber.org/zap/zapcore"
 	"gopkg.in/natefinch/lumberjack.v2"
 
-	"github.com/scythefly/orb"
+	set "github.com/deckarep/golang-set"
 )
 
 var (
 	logsLevel   sync.Map
-	logs        = orb.NewSet()
+	logs        = set.NewSet()
 	once        sync.Once
 	hookNormal  *lumberjack.Logger
 	encoderConf *zapcore.EncoderConfig
@@ -41,7 +40,6 @@ func New(tag string, level zapcore.Level) *zap.SugaredLogger {
 			panic(err)
 		}
 		filename := path.Join(dir, "logs/normal.log")
-		fmt.Println(filename)
 		hookNormal = &lumberjack.Logger{
 			Filename:  filename,
 			MaxSize:   500,
@@ -87,7 +85,7 @@ func New(tag string, level zapcore.Level) *zap.SugaredLogger {
 		atomicLevel,
 	)
 
-	ls := zap.New(core).Sugar().Named(tag)
+	ls := zap.New(core).WithOptions(zap.AddCaller()).Sugar().Named(tag)
 	logs.Add(ls)
 	return ls
 }
