@@ -12,6 +12,8 @@ import (
 
 	"ken/lib/amf"
 	"ken/lib/av"
+	"ken/service"
+	"ken/types"
 )
 
 const (
@@ -19,10 +21,6 @@ const (
 	INBOUND_CONN_STATUS_CONNECT_OK       = uint(1)
 	INBOUND_CONN_STATUS_CREATE_STREAM_OK = uint(2)
 )
-
-type InboundAuthHandler interface {
-	OnConnectAuth(ibConn InboundConn, connectReq *Command) bool
-}
 
 type InboundConnHandler interface {
 	ConnHandler
@@ -41,30 +39,34 @@ type InboundConn interface {
 	ConnectRequest() *Command
 }
 
-func NewInboundConn(ctx context.Context, c net.Conn, r *bufio.Reader, w *bufio.Writer,
-	authHandler InboundAuthHandler, maxChannelNumber int) (InboundConn, error) {
+func NewInboundConn(c net.Conn, r *bufio.Reader, w *bufio.Writer,
+	handler service.ServiceHandler, maxChannelNumber int) (InboundConn, error) {
 	iConn := &inboundConn{
-		authHandler: authHandler,
-		status:      INBOUND_CONN_STATUS_CLOSE,
-		streams:     make(map[uint32]*inboundStream),
+		status:   INBOUND_CONN_STATUS_CLOSE,
+		streams:  make(map[uint32]*inboundStream),
+		shandler: handler,
 	}
-	iConn.ctx, iConn.cancel = context.WithCancel(ctx)
-	iConn.conn = NewConn(ctx, c, r, w, iConn, maxChannelNumber)
+	iConn.cont = &types.Content{
+		ClientAddr: c.RemoteAddr().String(),
+		LocalAddr:  c.LocalAddr().String(),
+	}
+	iConn.conn = NewConn(c, r, w, iConn, maxChannelNumber)
 	return iConn, nil
 }
 
 type inboundConn struct {
-	ctx         context.Context
-	cancel      context.CancelFunc
-	connectReq  *Command
-	app         string
-	handler     InboundConnHandler
-	authHandler InboundAuthHandler
-	conn        Conn
-	status      uint
-	err         error
-	streams     map[uint32]*inboundStream
-	locker      sync.Mutex
+	ctx        context.Context
+	cancel     context.CancelFunc
+	shandler   service.ServiceHandler
+	cont       *types.Content
+	connectReq *Command
+	app        string
+	handler    InboundConnHandler
+	conn       Conn
+	status     uint
+	err        error
+	streams    map[uint32]*inboundStream
+	locker     sync.Mutex
 }
 
 // ////////////////////////////////////////////////////////////////////////////////////////
@@ -73,10 +75,10 @@ func (iconn *inboundConn) OnReceived(conn Conn, msg *Message) {
 	stream, found := iconn.streams[msg.StreamID]
 	if found {
 		if !stream.Received(msg) {
-			iconn.handler.OnReceived(iconn.conn, msg)
+			// iconn.handler.OnReceived(iconn.conn, msg)
 		}
 	} else {
-		iconn.handler.OnReceived(iconn.conn, msg)
+		// iconn.handler.OnReceived(iconn.conn, msg)
 	}
 }
 
@@ -93,7 +95,7 @@ func (iconn *inboundConn) OnReceivedRtmpCommand(conn Conn, cmd *Command) {
 
 func (iconn *inboundConn) OnClosed(conn Conn) {
 	iconn.status = INBOUND_CONN_STATUS_CLOSE
-	iconn.handler.OnStatus(iconn)
+	// iconn.handler.OnStatus(iconn)
 }
 
 // InboundConn
@@ -167,15 +169,15 @@ func (iconn *inboundConn) onConnect(cmd *Command) error {
 		return iconn.sendConnectErrorResult(cmd)
 	}
 
-	var err error
-	if iconn.authHandler.OnConnectAuth(iconn, cmd) {
-		iconn.conn.SetWindowAcknowledgementSize()
-		iconn.conn.SetPeerBandwidth(250000, SET_PEER_BANDWIDTH_DYNAMIC)
-		iconn.conn.SetChunkSize(DEFAULT_CHUNK_SIZE)
-		err = iconn.sendConnectSucceededResult(cmd)
-	} else {
-		err = iconn.sendConnectErrorResult(cmd)
-	}
+	// var err error
+	// if iconn.authHandler.OnConnectAuth(iconn, cmd) {
+	iconn.conn.SetWindowAcknowledgementSize()
+	iconn.conn.SetPeerBandwidth(250000, SET_PEER_BANDWIDTH_DYNAMIC)
+	iconn.conn.SetChunkSize(DEFAULT_CHUNK_SIZE)
+	err := iconn.sendConnectSucceededResult(cmd)
+	// } else {
+	// 	err = iconn.sendConnectErrorResult(cmd)
+	// }
 	return err
 }
 
@@ -192,11 +194,12 @@ func (iconn *inboundConn) onCreateStream(cmd *Command) {
 		f:             av.AcquirePacket(),
 		closed:        false,
 	}
-	stream.ctx, stream.cancel = context.WithCancel(iconn.ctx)
+	stream.handler = service.GetHandler(nil)
+	stream.cont = iconn.cont
 	iconn.allocStream(stream)
 	iconn.status = INBOUND_CONN_STATUS_CREATE_STREAM_OK
-	iconn.handler.OnStatus(iconn)
-	iconn.handler.OnStreamCreated(iconn, stream)
+	// iconn.handler.OnStatus(iconn)
+	// iconn.handler.OnStreamCreated(iconn, stream)
 	if err = iconn.sendCreateStreamSuccessResult(cmd); err != nil {
 		logger.Errorf("%+v", errors.Wrap(err, "inboundConn::sendCreateStreamSuccessResult"))
 	}
@@ -208,7 +211,7 @@ func (iconn *inboundConn) releaseStream(streamID uint32) {
 
 func (iconn *inboundConn) onCloseStream(stream *inboundStream) {
 	iconn.releaseStream(stream.id)
-	iconn.handler.OnStreamClosed(iconn, stream)
+	// iconn.handler.OnStreamClosed(iconn, stream)
 }
 
 func (iconn *inboundConn) sendConnectSucceededResult(req *Command) error {

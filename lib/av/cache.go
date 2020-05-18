@@ -2,7 +2,6 @@ package av
 
 import (
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/pkg/errors"
@@ -15,18 +14,21 @@ type Cache struct {
 	// LatestTimestamp added with packet.deltaTimestamp
 	// when packet written
 	LatestTimestamp uint32
+	// Avaliable is not 0 if avaliable writer exists
+	Avaliable int32
 
-	// CodecVersion++ when aac/avc packet written
-	CodecVersion    uint32
 	codecSwapLocker *sync.RWMutex
-	AAC             *Packet
-	AVC             *Packet
-	MetaVersion     uint32
-	Meta            *Packet
+	/*
+		// CodecVersion++ when aac/avc packet written
+		CodecVersion    uint32
+		AAC             *Packet
+		AVC             *Packet
+		MetaVersion     uint32
+		Meta            *Packet
+	*/
 	// AudioOnly
 	// set this to false when video key frame received
-	AudioOnly   bool
-	prevIsCodec bool
+	AudioOnly bool
 
 	// idx of the first frame in cache
 	StartIdx       int64
@@ -62,7 +64,6 @@ func NewCache() *Cache {
 	c := &Cache{
 		codecSwapLocker: &sync.RWMutex{},
 		AudioOnly:       true,
-		prevIsCodec:     false,
 		codecNodeStart:  &pktNode{f: f},
 		metaNodeStart:   &pktNode{f: f},
 		gPos: &gop{
@@ -95,6 +96,7 @@ func (c *Cache) SetID(id string) {
 
 // Write to gop cache
 func (c *Cache) Write(f *Packet) {
+	logger.Infof(">>> delta: %d", f.Delta)
 	c.noDataReceivedCnt = 0
 	f.Timestamp = c.LatestTimestamp
 	// Codec
@@ -105,16 +107,8 @@ func (c *Cache) Write(f *Packet) {
 		}
 		c.codecNode.next = &pktNode{f: f}
 		c.codecNode = c.codecNode.next
-		if f.Type == AUDIO_TYPE {
-			c.AAC = f
-			atomic.AddUint32(&c.CodecVersion, 1)
-		} else if f.Type == VIDEO_TYPE {
-			c.AVC = f
-			atomic.AddUint32(&c.CodecVersion, 1)
-		}
 		return
 	} else if f.IsMeta {
-		logger.Infof("[%s] receive meta packet", c.keyString)
 		f.Idx = c.Idx
 		if c.gPos.idx > 0 {
 			c.gPos.Write(f)
@@ -258,10 +252,20 @@ func (c *Cache) ClosePacketWriter(w *packetWriter) {
 func (c *Cache) NewPacketReader() PacketReader {
 	logger.Debugf("new reader from Cache...")
 	r := &packetReader{
-		cache: c,
-		cond:  c.cond,
+		cache:                c,
+		cond:                 c.cond,
+		packetUnavaliableCnt: 0,
 	}
-	r.node, r.startTime = c.getStartNode()
+	for {
+		r.node, r.startTime = c.getStartNode()
+		// wait for relay
+		if r.node == nil && r.packetUnavaliableCnt < 6 {
+			r.packetUnavaliableCnt++
+			time.Sleep(500 * time.Millisecond)
+			continue
+		}
+		break
+	}
 	if r.node == nil {
 		return nil
 	}
@@ -276,12 +280,10 @@ func (c *Cache) getStartNode() (*pktNode, uint32) {
 	// logger.Infof("Cache, getStartNode...")
 	if c.gopStart.next == nil {
 		// TODO: relay
-		c.cond.L.Lock()
-		c.cond.Wait()
-		c.cond.L.Unlock()
+		return nil, 0
 	}
-	// c.codecSwapLocker.RLock()
-	// defer c.codecSwapLocker.RUnlock()
+	c.codecSwapLocker.RLock()
+	defer c.codecSwapLocker.RUnlock()
 	pos := c.gopStart
 	if pos.idx < 1 {
 		pos = pos.next
@@ -341,11 +343,6 @@ func (c *Cache) getStartNode() (*pktNode, uint32) {
 	}
 	logger.Debugf(">>> link first key frame, idx: %d", pos.nodeStart.f.Idx)
 
-	// node = c.codecNodeStart
-	// for node != nil {
-	// 	logger.Infof("- - - - - codec list, idx: %d, len: %d", node.f.Idx, node.f.Len())
-	// 	node = node.next
-	// }
 	return nnode.next, pos.nodeStart.f.Timestamp
 }
 

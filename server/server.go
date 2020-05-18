@@ -5,7 +5,9 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
+	"ken/lib/http"
 	"ken/lib/rtmp"
+	"ken/service"
 )
 
 var (
@@ -18,10 +20,13 @@ func init() {
 }
 
 func Start() error {
-	// g.Go(func() error {
-	return rtmp.StartServer(ctx, "tcp", "0.0.0.0:1935")
-	// return rtmp.StartServer(ctx, "tcp", "localhost:1935")
-	// })
+	g.Go(func() error {
+		return rtmp.StartServer("tcp", ":1935", service.GetHandler(ctx))
+	})
 
-	// return g.Wait()
+	g.Go(func() error {
+		return http.StartServer(":8080")
+	})
+
+	return g.Wait()
 }

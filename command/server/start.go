@@ -1,8 +1,6 @@
 package server
 
 import (
-	"fmt"
-
 	"github.com/spf13/cobra"
 
 	"ken/monitor"
@@ -23,8 +21,6 @@ func newStartCommand() *cobra.Command {
 }
 
 func start(opt *options, args []string) (err error) {
-	fmt.Println("---- server ----")
-	fmt.Println("--- start monitor")
 	go monitor.Start()
 	return server.Start()
 }

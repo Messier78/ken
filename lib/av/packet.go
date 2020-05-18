@@ -40,17 +40,15 @@ type PacketReader interface {
 }
 
 type packetReader struct {
-	idx          int64
-	avc          *Packet
-	aac          *Packet
-	codecVersion uint32
-	metaVersion  uint32
+	idx int64
 	// timestamp of this reader has been played
 	timestamp uint32
 	// absoulte timestamp of the first frame
 	startTime uint32
 	//
 	startSysTime time.Time
+	//
+	packetUnavaliableCnt int
 
 	cache *Cache
 	node  *pktNode
@@ -76,13 +74,10 @@ func (r *packetReader) ReadPacket(ff *Packet) (err error) {
 		r.node = r.node.next
 		return nil
 	}
-
-	r.cond.L.Lock()
-	r.cond.Wait()
-	r.cond.L.Unlock()
-	// time.Sleep(40 * time.Millisecond)
+	time.Sleep(40 * time.Millisecond)
 
 	if r.node.next == nil {
+		r.packetUnavaliableCnt++
 		return r.cache.errStatus
 	}
 	f = r.node.f
@@ -98,6 +93,7 @@ func (r *packetReader) fixPacket(f *Packet, ff *Packet) {
 		return
 	}
 
+	r.packetUnavaliableCnt = 0
 	ff.Buffer = bytes.NewBuffer(f.Buffer.Bytes())
 	ff.Idx = f.Idx
 	ff.Type = f.Type

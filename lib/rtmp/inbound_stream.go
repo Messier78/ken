@@ -10,6 +10,8 @@ import (
 
 	"ken/lib/amf"
 	"ken/lib/av"
+	"ken/service"
+	"ken/types"
 )
 
 type InboundStreamHandler interface {
@@ -34,7 +36,8 @@ type InboundStream interface {
 
 type inboundStream struct {
 	ctx           context.Context
-	cancel        context.CancelFunc
+	cont          *types.Content
+	handler       service.ServiceHandler
 	id            uint32
 	genID         int
 	streamName    string
@@ -221,7 +224,18 @@ func (stream *inboundStream) onPlay(cmd *Command) bool {
 		logger.Errorf("parse stream name failed: %s, err: %s", stream.streamName, err.Error())
 		return false
 	}
-	stream.keyString = stream.conn.app + u.Path
+	// ----------- service ---------------
+	stream.cont.App = stream.conn.app
+	stream.cont.Name = u.Path
+	stream.cont.RawQuery = u.RawQuery
+	stream.cont.KeyString = stream.conn.app + u.Path
+	var status int
+	stream.ctx, status = stream.handler.OnPlay(stream.cont)
+	if status != 200 {
+		return false
+	}
+	// ----------- service ---------------
+	stream.keyString = stream.cont.KeyString
 	logger.Debugf("inboundStream::onPlay, key: %s", stream.keyString)
 	stream.s = av.AttachToStream(stream.keyString)
 	if stream.r = stream.s.NewPacketReader(); stream.r == nil {
@@ -256,8 +270,18 @@ func (stream *inboundStream) onPublish(cmd *Command) bool {
 		logger.Errorf("parse stream name failed: %s", stream.streamName)
 		return false
 	}
-	logger.Debugf(">>>> stream name: %s", stream.streamName)
-	stream.keyString = stream.conn.app + u.Path
+	// ----------- service ---------------
+	stream.cont.App = stream.conn.app
+	stream.cont.Name = u.Path
+	stream.cont.RawQuery = u.RawQuery
+	stream.cont.KeyString = stream.conn.app + u.Path
+	var status int
+	stream.ctx, status = stream.handler.OnPublish(stream.cont)
+	if status != 200 {
+		return false
+	}
+	// ----------- service ---------------
+	stream.keyString = stream.cont.KeyString
 	stream.genID, _ = strconv.Atoi(u.Query().Get("genId"))
 	stream.isPublisher = true
 	stream.s = av.AttachToStream(stream.keyString)
@@ -284,7 +308,6 @@ func (stream *inboundStream) onDeleteStream(cmd *Command) bool {
 		stream.w = nil
 	}
 	stream.closed = true
-	stream.cancel()
 	logger.Debugf(">> onDeleteStream, key: %s", stream.keyString)
 	return true
 }

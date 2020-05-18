@@ -84,7 +84,7 @@ func Dial(ctx context.Context, url string, handler OutboundConnHandler, maxChann
 		status:  OUTBOUND_CONN_STATUS_HANDSHAKE_OK,
 	}
 	oconn.handler.OnStatus(oconn)
-	oconn.conn = NewConn(ctx, c, r, w, oconn, maxChannelNumber)
+	oconn.conn = NewConn(c, r, w, oconn, maxChannelNumber)
 	return oconn, nil
 }
 

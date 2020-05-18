@@ -46,23 +46,6 @@ type conn struct {
 	inChunkStreams  map[uint32]*InboundChunkStream
 	keyString       string
 
-	// High-priority send message buffer
-	// Protocol control message are sent with highest priority
-	highPriorityMessageQueue  chan *Message
-	highPriorityMessage       *Message
-	highPriorityMessageOffset int
-
-	// Middle-priority send message buffer
-	middlePriorityMessageQueue  chan *Message
-	middlePriorityMessage       *Message
-	middlePriorityMessageOffset int
-
-	// Low-priority send message buffer
-	// video message is assigned the lowest priority
-	lowPriorityMessageQueue  chan *Message
-	lowPriorityMessage       *Message
-	lowPriorityMessageOffset int
-
 	// Chunk size
 	inChunkSize      uint32
 	outChunkSize     uint32
@@ -101,19 +84,11 @@ type conn struct {
 	err               error
 }
 
-func NewConn(ctx context.Context, c net.Conn, br *bufio.Reader, bw *bufio.Writer, handler ConnHandler, maxChannelNumber int) Conn {
+func NewConn(c net.Conn, br *bufio.Reader, bw *bufio.Writer,
+	handler ConnHandler, maxChannelNumber int) Conn {
 	conn := &conn{
-		outChunkStreams: make(map[uint32]*OutboundChunkStream),
-		inChunkStreams:  make(map[uint32]*InboundChunkStream),
-		// highPriorityMessageQueue:    make(chan *Message, DEFAULT_HIGH_PRIORITY_BUFFER_SIZE),
-		// highPriorityMessage:         nil,
-		// highPriorityMessageOffset:   0,
-		// middlePriorityMessageQueue:  make(chan *Message, DEFAULT_MIDDLE_PRIORITY_BUFFER_SIZE),
-		// middlePriorityMessage:       nil,
-		// middlePriorityMessageOffset: 0,
-		// lowPriorityMessageQueue:     make(chan *Message, DEFAULT_LOW_PRIORITY_BUFFER_SIZE),
-		// lowPriorityMessage:          nil,
-		// lowPriorityMessageOffset:    0,
+		outChunkStreams:             make(map[uint32]*OutboundChunkStream),
+		inChunkStreams:              make(map[uint32]*InboundChunkStream),
 		inChunkSize:                 DEFAULT_CHUNK_SIZE,
 		outChunkSize:                DEFAULT_CHUNK_SIZE,
 		outChunkSizeTemp:            0,
@@ -135,7 +110,6 @@ func NewConn(ctx context.Context, c net.Conn, br *bufio.Reader, bw *bufio.Writer
 		lastTransactionID:           0,
 		err:                         nil,
 	}
-	conn.ctx, conn.cancel = context.WithCancel(ctx)
 
 	// Create Protocal control chunk stream
 	conn.outChunkStreams[CS_ID_PROTOCOL_CONTROL] = NewOutboundChunkStream(CS_ID_PROTOCOL_CONTROL)
@@ -156,19 +130,6 @@ func (conn *conn) Close() {
 }
 
 func (conn *conn) Send(msg *Message) error {
-	/*
-		csiType := msg.ChunkStreamID % 6
-		if csiType == CS_ID_PROTOCOL_CONTROL || csiType == CS_ID_COMMAND {
-			conn.highPriorityMessageQueue <- msg
-			return nil
-		}
-		if msg.Type == VIDEO_TYPE {
-			conn.lowPriorityMessageQueue <- msg
-			return nil
-		}
-		conn.middlePriorityMessageQueue <- msg
-		return nil
-	*/
 	return conn.sendMessage(msg)
 }
 
@@ -240,19 +201,11 @@ func (conn *conn) SetStreamBufferSize(streamID uint32, size uint32) {
 }
 
 func (conn *conn) OutboundChunkStream(id uint32) (cs *OutboundChunkStream, found bool) {
-	// if v, found := conn.outChunkStreams.Load(id); found {
-	// 	cs, _ = v.(*OutboundChunkStream)
-	// 	return cs, found
-	// }
 	cs, found = conn.outChunkStreams[id]
 	return
 }
 
 func (conn *conn) InboundChunkStream(id uint32) (cs *InboundChunkStream, found bool) {
-	// if v, found := conn.inChunkStreams.Load(id); found {
-	// 	cs, _ = v.(*InboundChunkStream)
-	// 	return cs, found
-	// }
 	cs, found = conn.inChunkStreams[id]
 	return
 }
@@ -351,12 +304,7 @@ func (conn *conn) recvLoop() {
 	var cs *InboundChunkStream
 	var ok bool
 	var remain uint32
-	for {
-		select {
-		case <-conn.ctx.Done():
-			return
-		default:
-		}
+	for !conn.closed {
 		n, vfmt, csi, err := ReadBaseHeader(conn.br)
 		errPanic(err, "Read header")
 		conn.inBytes += uint32(n)
@@ -626,6 +574,7 @@ func (conn *conn) receivedCommand(msg *Message) (err error) {
 }
 
 func (conn *conn) sendMessage(msg *Message) (err error) {
+	var n int
 	cs, ok := conn.outChunkStreams[msg.ChunkStreamID]
 	if !ok || cs == nil {
 		return
@@ -641,7 +590,7 @@ func (conn *conn) sendMessage(msg *Message) (err error) {
 
 	if header.MessageLength > conn.outChunkSize {
 		// split into chunks
-		if _, err = CopyToNetwork(conn.bw, msg.Buf, int64(conn.outChunkSize)); err != nil {
+		if n, err = conn.bw.Write(msg.Buf.Next(int(conn.outChunkSize))); err != nil || n != int(conn.outChunkSize) {
 			conn.error(err, "send message copy buffer")
 			return
 		}
@@ -653,13 +602,14 @@ func (conn *conn) sendMessage(msg *Message) (err error) {
 				return
 			}
 			if remain > conn.outChunkSize {
-				if _, err = CopyToNetwork(conn.bw, msg.Buf, int64(conn.outChunkSize)); err != nil {
+				// if _, err = CopyToNetwork(conn.bw, msg.Buf, int64(conn.outChunkSize)); err != nil {
+				if n, err = conn.bw.Write(msg.Buf.Next(int(conn.outChunkSize))); err != nil || n != int(conn.outChunkSize) {
 					conn.error(err, "send message copy split buffer 1")
 					return
 				}
 				remain -= conn.outChunkSize
 			} else {
-				if _, err = CopyToNetwork(conn.bw, msg.Buf, int64(remain)); err != nil {
+				if n, err = conn.bw.Write(msg.Buf.Next(int(remain))); err != nil || n != int(remain) {
 					conn.error(err, "send message copy split buffer 2")
 					return
 				}
@@ -667,12 +617,12 @@ func (conn *conn) sendMessage(msg *Message) (err error) {
 			}
 		}
 	} else {
-		if _, err = CopyToNetwork(conn.bw, msg.Buf, int64(header.MessageLength)); err != nil {
+		if n, err = conn.bw.Write(msg.Buf.Next(int(header.MessageLength))); err != nil || n != int(header.MessageLength) {
 			conn.error(err, "send message copy buffer")
 			return
 		}
 	}
-	if err = FlushToNetwork(conn.bw); err != nil {
+	if err = conn.bw.Flush(); err != nil {
 		conn.error(err, "send message, fulsh 3")
 		return
 	}
@@ -684,15 +634,6 @@ func (conn *conn) sendMessage(msg *Message) (err error) {
 	// TODO: recycle msg
 	return
 }
-
-/*
-func (conn *conn) checkAndSendHighPriorityMessage() {
-	for len(conn.highPriorityMessageQueue) > 0 {
-		msg := <-conn.highPriorityMessageQueue
-		conn.sendMessage(msg)
-	}
-}
-*/
 
 func (conn *conn) invokeSetChunkSize(msg *Message) {
 	if err := binary.Read(msg.Buf, binary.BigEndian, &conn.inChunkSize); err != nil {
