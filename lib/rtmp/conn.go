@@ -18,6 +18,7 @@ import (
 type Conn interface {
 	Close()
 	Send(msg *Message) error
+	Flush() error
 	CreateChunkStream(id uint32) (*OutboundChunkStream, error)
 	CloseChunkStream(id uint32)
 	NewTransactionID() uint32
@@ -131,6 +132,10 @@ func (conn *conn) Close() {
 
 func (conn *conn) Send(msg *Message) error {
 	return conn.sendMessage(msg)
+}
+
+func (conn *conn) Flush() error {
+	return conn.bw.Flush()
 }
 
 func (conn *conn) CreateChunkStream(id uint32) (*OutboundChunkStream, error) {
@@ -622,10 +627,11 @@ func (conn *conn) sendMessage(msg *Message) (err error) {
 			return
 		}
 	}
-	if err = conn.bw.Flush(); err != nil {
-		conn.error(err, "send message, fulsh 3")
-		return
-	}
+	// Flush() should not be called every time a packet was sent
+	// if err = conn.bw.Flush(); err != nil {
+	// 	conn.error(err, "send message, fulsh 3")
+	// 	return
+	// }
 	if msg.ChunkStreamID == CS_ID_PROTOCOL_CONTROL && msg.Type == SET_CHUNK_SIZE && conn.outChunkSizeTemp != 0 {
 		logger.Infof("set out chunk size: %d", conn.outChunkSizeTemp)
 		conn.outChunkSize = conn.outChunkSizeTemp

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
+	"time"
 
 	"github.com/pkg/errors"
 
@@ -379,6 +380,19 @@ func (stream *inboundStream) play() {
 	var err error
 	for !stream.closed {
 		err = stream.r.ReadPacket(stream.f)
+		if err == av.ErrSendTooMuch {
+			if netErr := stream.conn.Flush(); netErr != nil {
+				logger.Errorf("flush data return error: %s", netErr.Error())
+				return
+			}
+			time.Sleep(500 * time.Millisecond)
+		} else if err == av.ErrNoPacketInCache {
+			if netErr := stream.conn.Flush(); netErr != nil {
+				logger.Errorf("flush data return error: %s", netErr.Error())
+				return
+			}
+			time.Sleep(40 * time.Millisecond)
+		}
 		if stream.f.Buffer == nil {
 			continue
 		}
@@ -391,10 +405,9 @@ func (stream *inboundStream) play() {
 		if stream.f.IsCodec {
 			logger.Debugf("--->>> send codec data to client, len: %d", stream.f.Len())
 		}
-		// TODO: get session status by err
-		if err != nil {
-			logger.Infof("client read packet return err: %s", err.Error())
-		}
+		// if err != nil {
+		// 	logger.Infof("client read packet return err: %s", err.Error())
+		// }
 		// logger.Debugf("---- send data to client, type: %d, idx: %d, delta: %d, length: %d", stream.f.Type, stream.f.Idx, stream.f.Delta, stream.f.Len())
 		if err = stream.SendPacket(stream.f); err != nil {
 			logger.Errorf("send data return error: %s", err.Error())

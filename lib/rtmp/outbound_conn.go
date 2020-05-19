@@ -2,7 +2,6 @@ package rtmp
 
 import (
 	"bufio"
-	"context"
 	"crypto/tls"
 	"fmt"
 	"net"
@@ -50,7 +49,7 @@ type outboundConn struct {
 	streams      sync.Map
 }
 
-func Dial(ctx context.Context, url string, handler OutboundConnHandler, maxChannelNumber int) (OutboundConn, error) {
+func Dial(url string, handler OutboundConnHandler, maxChannelNumber int) (OutboundConn, error) {
 	rtmpURL, err := ParseURL(url)
 	if err != nil {
 		return nil, err
@@ -73,7 +72,7 @@ func Dial(ctx context.Context, url string, handler OutboundConnHandler, maxChann
 	}
 	r := bufio.NewReader(c)
 	w := bufio.NewWriter(c)
-	timeout := time.Duration(10 * time.Second)
+	timeout := 10 * time.Second
 	if err = Handshake(c, r, w, timeout); err != nil {
 		return nil, err
 	}

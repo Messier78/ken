@@ -52,7 +52,6 @@ type packetReader struct {
 
 	cache *Cache
 	node  *pktNode
-	cond  *sync.Cond
 }
 
 // ReadPacket
@@ -65,7 +64,7 @@ func (r *packetReader) ReadPacket(ff *Packet) (err error) {
 		r.fixPacket(f, ff)
 		t := r.startSysTime.Add(time.Duration(r.timestamp) * time.Millisecond)
 		if t.After(time.Now().Add(r.cache.conf.ClientDuration)) {
-			time.Sleep(500 * time.Millisecond)
+			err = ErrSendTooMuch
 		}
 	}()
 
@@ -74,15 +73,9 @@ func (r *packetReader) ReadPacket(ff *Packet) (err error) {
 		r.node = r.node.next
 		return nil
 	}
-	time.Sleep(40 * time.Millisecond)
 
-	if r.node.next == nil {
-		r.packetUnavaliableCnt++
-		return r.cache.errStatus
-	}
-	f = r.node.f
-	r.node = r.node.next
-	return nil
+	r.packetUnavaliableCnt++
+	return ErrNoPacketInCache
 }
 
 // fixPacket

@@ -253,7 +253,6 @@ func (c *Cache) NewPacketReader() PacketReader {
 	logger.Debugf("new reader from Cache...")
 	r := &packetReader{
 		cache:                c,
-		cond:                 c.cond,
 		packetUnavaliableCnt: 0,
 	}
 	for {

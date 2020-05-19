@@ -33,6 +33,7 @@ type InboundConn interface {
 	Close()
 	Status() (uint, error)
 	Send(msg *Message) error
+	Flush() error
 	Call(params ...interface{}) (err error)
 	Conn() Conn
 	Attach(handler InboundConnHandler)
@@ -114,6 +115,10 @@ func (iconn *inboundConn) Status() (uint, error) {
 
 func (iconn *inboundConn) Send(msg *Message) error {
 	return iconn.conn.Send(msg)
+}
+
+func (iconn *inboundConn) Flush() error {
+	return iconn.conn.Flush()
 }
 
 func (iconn *inboundConn) Call(params ...interface{}) (err error) {
