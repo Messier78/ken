@@ -95,7 +95,7 @@ func (stream *inboundStream) Received(msg *Message) bool {
 		// }
 		msg.Buf.Type = msg.Type
 		msg.Buf.Delta = msg.Timestamp
-		stream.w.WritePacket(CodecPacket(stream, msg.Buf))
+		stream.w.WritePacket(CodecPacket(msg.Buf))
 		return true
 	}
 	if msg.Type == DATA_AMF0 {
@@ -226,13 +226,14 @@ func (stream *inboundStream) onPlay(cmd *Command) bool {
 		return false
 	}
 	// ----------- service ---------------
-	stream.cont.App = stream.conn.app
-	stream.cont.Name = u.Path
-	stream.cont.RawQuery = u.RawQuery
-	stream.cont.KeyString = stream.conn.app + u.Path
-	var status int
-	stream.ctx, status = stream.handler.OnPlay(stream.cont)
-	if status != 200 {
+	cont := stream.cont
+	cont.App = stream.conn.app
+	cont.Name = u.Path
+	cont.RawQuery = u.RawQuery
+	cont.KeyString = stream.conn.app + u.Path
+	cont.Status = 200
+	stream.ctx = stream.handler.OnPlay(cont)
+	if cont.Status != 200 {
 		return false
 	}
 	// ----------- service ---------------
@@ -291,6 +292,10 @@ func (stream *inboundStream) onPublish(cmd *Command) bool {
 	}
 
 	stream.startPublish()
+	if err = stream.conn.Flush(); err != nil {
+		logger.Errorf("start publish err: %s", err.Error())
+		return false
+	}
 	return true
 }
 

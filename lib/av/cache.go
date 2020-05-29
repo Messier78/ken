@@ -29,6 +29,9 @@ type Cache struct {
 	// AudioOnly
 	// set this to false when video key frame received
 	AudioOnly bool
+	// TimestampFix
+	TimestampFix bool
+	maxDelta     uint32
 
 	// idx of the first frame in cache
 	StartIdx       int64
@@ -64,6 +67,7 @@ func NewCache() *Cache {
 	c := &Cache{
 		codecSwapLocker: &sync.RWMutex{},
 		AudioOnly:       true,
+		TimestampFix:    true,
 		codecNodeStart:  &pktNode{f: f},
 		metaNodeStart:   &pktNode{f: f},
 		gPos: &gop{
@@ -73,13 +77,7 @@ func NewCache() *Cache {
 		writerSwapLocker: &sync.RWMutex{},
 		writers:          make(map[int]*packetWriter),
 		cond:             sync.NewCond(&sync.Mutex{}),
-		conf: &Config{
-			AudioOnlyGopDuration: 5000,
-			DelayTime:            3000,
-			RingSize:             1024,
-			SessionTimeout:       60,
-			Sync:                 300,
-		},
+		conf:             initConfig(),
 	}
 	c.gPos.duration = c.conf.AudioOnlyGopDuration + 1
 	c.codecNode = c.codecNodeStart
@@ -96,7 +94,10 @@ func (c *Cache) SetID(id string) {
 
 // Write to gop cache
 func (c *Cache) Write(f *Packet) {
-	logger.Infof(">>> delta: %d", f.Delta)
+	// logger.Infof(">>> delta: %d", f.Delta)
+	if c.TimestampFix {
+		c.fixTimestamp(f)
+	}
 	c.noDataReceivedCnt = 0
 	f.Timestamp = c.LatestTimestamp
 	// Codec
@@ -130,7 +131,7 @@ func (c *Cache) Write(f *Packet) {
 				c.gPos.Write(f)
 			}
 			c.Idx++
-			c.cond.Broadcast()
+			// c.cond.Broadcast()
 			return
 		} else {
 			// drop video frame until key frame
@@ -148,7 +149,7 @@ func (c *Cache) Write(f *Packet) {
 		c.gPos.Write(f)
 	}
 	c.Idx++
-	c.cond.Broadcast()
+	// c.cond.Broadcast()
 }
 
 func (c *Cache) swapGopStart() {
@@ -248,6 +249,7 @@ func (c *Cache) ClosePacketWriter(w *packetWriter) {
 	}
 }
 
+// TODO: 增加参数决定这个reader是否需要LowLatency
 // PacketReader
 func (c *Cache) NewPacketReader() PacketReader {
 	logger.Debugf("new reader from Cache...")
@@ -343,6 +345,17 @@ func (c *Cache) getStartNode() (*pktNode, uint32) {
 	logger.Debugf(">>> link first key frame, idx: %d", pos.nodeStart.f.Idx)
 
 	return nnode.next, pos.nodeStart.f.Timestamp
+}
+
+func (c *Cache) fixTimestamp(f *Packet) {
+	if f.Delta < c.conf.MaxAvaliableDelta && f.Delta > c.maxDelta {
+		c.maxDelta = f.Delta
+	}
+	// logger.Debugf("[%s] frame delta: %d", c.keyString, f.Delta)
+	if f.Delta > c.conf.MaxDelta {
+		logger.Debugf("[%s] set frame delta from %d to %d", c.keyString, f.Delta, c.maxDelta)
+		f.Delta = c.maxDelta
+	}
 }
 
 // monitor

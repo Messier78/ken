@@ -13,8 +13,8 @@ import (
 
 func main() {
 	runtime.GOMAXPROCS(0)
-	av.InitLog(zapcore.InfoLevel)
-	rtmp.InitLog(zapcore.InfoLevel)
+	av.InitLog(zapcore.DebugLevel)
+	rtmp.InitLog(zapcore.DebugLevel)
 	command.Execute()
 
 	log.Flush()

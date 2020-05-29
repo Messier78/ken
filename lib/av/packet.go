@@ -31,9 +31,6 @@ func AcquirePacket() *Packet {
 	return &Packet{Buffer: &bytes.Buffer{}}
 }
 
-func ReleasePacket(pkt *Packet) {
-}
-
 // PacketReader
 type PacketReader interface {
 	ReadPacket(ff *Packet) error

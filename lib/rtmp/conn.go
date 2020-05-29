@@ -2,7 +2,6 @@ package rtmp
 
 import (
 	"bufio"
-	"context"
 	"encoding/binary"
 	"io"
 	"net"
@@ -40,8 +39,6 @@ type ConnHandler interface {
 }
 
 type conn struct {
-	ctx    context.Context
-	cancel context.CancelFunc
 	// streams
 	outChunkStreams map[uint32]*OutboundChunkStream
 	inChunkStreams  map[uint32]*InboundChunkStream
@@ -126,12 +123,15 @@ func NewConn(c net.Conn, br *bufio.Reader, bw *bufio.Writer,
 
 func (conn *conn) Close() {
 	conn.closed = true
-	conn.cancel()
 	conn.c.Close()
 }
 
 func (conn *conn) Send(msg *Message) error {
-	return conn.sendMessage(msg)
+	err := conn.sendMessage(msg)
+	if err != nil {
+		logger.Errorf("Send message err: %s", err.Error())
+	}
+	return err
 }
 
 func (conn *conn) Flush() error {
@@ -311,7 +311,7 @@ func (conn *conn) recvLoop() {
 	var remain uint32
 	for !conn.closed {
 		n, vfmt, csi, err := ReadBaseHeader(conn.br)
-		errPanic(err, "Read header")
+		errPanic(err, "Read header 1")
 		conn.inBytes += uint32(n)
 		if cs, ok = conn.inChunkStreams[csi]; !ok || cs == nil {
 			cs = NewInboundChunkStream(csi)
@@ -321,7 +321,7 @@ func (conn *conn) recvLoop() {
 		// Read header
 		header := &Header{}
 		n, err = header.ReadHeader(conn.br, vfmt, csi, cs.lastHeader)
-		errPanic(err, "Read Header")
+		errPanic(err, "Read Header 2")
 		conn.inBytes += uint32(n)
 
 		var absoluteTimestamp uint32

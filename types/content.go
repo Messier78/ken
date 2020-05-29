@@ -17,6 +17,9 @@ type Content struct {
 	PageURL      string
 	SwfURL       string
 	Scheme       string
+
+	Status       int
+	TimestampFix bool
 }
 
 type key int

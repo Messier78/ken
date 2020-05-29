@@ -2,7 +2,7 @@ package rtmp
 
 import "ken/lib/av"
 
-func CodecPacket(s *inboundStream, f *av.Packet) (ff *av.Packet) {
+func CodecPacket(f *av.Packet) (ff *av.Packet) {
 	defer func() {
 		ff = f
 	}()
@@ -19,7 +19,7 @@ func CodecPacket(s *inboundStream, f *av.Packet) (ff *av.Packet) {
 	}
 
 	// codec
-	fmt := uint8(buf[0])
+	fmt := buf[0]
 	acodecID := (fmt & 0xf0) >> 4
 	vcodecID := fmt & 0x0f
 

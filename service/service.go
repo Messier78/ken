@@ -16,7 +16,7 @@ var (
 
 type ServiceHandler interface {
 	Ctx() context.Context
-	OnPlay(cont *types.Content) (context.Context, int)
+	OnPlay(cont *types.Content) context.Context
 	OnPublish(cont *types.Content) (context.Context, int)
 	OnPull(ctx context.Context)
 	OnPush(ctx context.Context)

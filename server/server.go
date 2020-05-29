@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 
 	"golang.org/x/sync/errgroup"
 
@@ -20,13 +21,18 @@ func init() {
 }
 
 func Start() error {
+	h := service.GetHandler(ctx)
 	g.Go(func() error {
-		return rtmp.StartServer("tcp", ":1935", service.GetHandler(ctx))
+		fmt.Println("--------- start rtmp server ----------")
+		return rtmp.StartServer("tcp", ":1935", h)
 	})
 
 	g.Go(func() error {
+		fmt.Println("---------- start http server -----------")
 		return http.StartServer(":8080")
 	})
 
-	return g.Wait()
+	err := g.Wait()
+	fmt.Println("----------- server stop ----------------")
+	return err
 }

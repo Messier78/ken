@@ -70,7 +70,6 @@ type inboundConn struct {
 	locker     sync.Mutex
 }
 
-// ////////////////////////////////////////////////////////////////////////////////////////
 // ConnHandler
 func (iconn *inboundConn) OnReceived(conn Conn, msg *Message) {
 	stream, found := iconn.streams[msg.StreamID]
@@ -84,13 +83,17 @@ func (iconn *inboundConn) OnReceived(conn Conn, msg *Message) {
 }
 
 func (iconn *inboundConn) OnReceivedRtmpCommand(conn Conn, cmd *Command) {
+	var err error
 	switch cmd.Name {
 	case "connect":
-		iconn.onConnect(cmd)
+		err = iconn.onConnect(cmd)
 	case "createStream":
-		iconn.onCreateStream(cmd)
+		err = iconn.onCreateStream(cmd)
 	default:
 		logger.Debugf("unhandled command: %+v", cmd)
+	}
+	if err != nil {
+		logger.Errorf("cmd: %s, err: %s", cmd.Name, err.Error())
 	}
 }
 
@@ -173,25 +176,27 @@ func (iconn *inboundConn) onConnect(cmd *Command) error {
 		logger.Errorf("onConnect() app is not a string")
 		return iconn.sendConnectErrorResult(cmd)
 	}
+	logger.Debugf("onConnect, app: %s", iconn.app)
 
 	// var err error
 	// if iconn.authHandler.OnConnectAuth(iconn, cmd) {
 	iconn.conn.SetWindowAcknowledgementSize()
 	iconn.conn.SetPeerBandwidth(250000, SET_PEER_BANDWIDTH_DYNAMIC)
 	iconn.conn.SetChunkSize(DEFAULT_CHUNK_SIZE)
-	err := iconn.sendConnectSucceededResult(cmd)
+	iconn.sendConnectSucceededResult(cmd)
+	err := iconn.Flush()
 	// } else {
 	// 	err = iconn.sendConnectErrorResult(cmd)
 	// }
 	return err
 }
 
-func (iconn *inboundConn) onCreateStream(cmd *Command) {
+func (iconn *inboundConn) onCreateStream(cmd *Command) error {
 	logger.Debugf(">>> inboundConn, onCreateStream")
 	cs, err := iconn.conn.CreateMediaChunkStream()
 	if err != nil {
 		logger.Errorf("CreateStream() create media chunk stream err: %s", err.Error())
-		return
+		return err
 	}
 	stream := &inboundStream{
 		conn:          iconn,
@@ -208,6 +213,8 @@ func (iconn *inboundConn) onCreateStream(cmd *Command) {
 	if err = iconn.sendCreateStreamSuccessResult(cmd); err != nil {
 		logger.Errorf("%+v", errors.Wrap(err, "inboundConn::sendCreateStreamSuccessResult"))
 	}
+	err = iconn.Flush()
+	return err
 }
 
 func (iconn *inboundConn) releaseStream(streamID uint32) {
@@ -249,7 +256,6 @@ func (iconn *inboundConn) sendConnectRequest(req *Command, name string, obj1, ob
 	cmd.Objects[1] = obj2
 
 	buf := av.AcquirePacket()
-	// TODO: error handle
 	errPanic(cmd.Write(buf), "sendConnectRequest() create command")
 
 	msg := &Message{

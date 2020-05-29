@@ -9,11 +9,13 @@ import (
 
 var (
 	once sync.Once
-	ps   *kenService
+	ks   *kenService
 )
 
 type appMap map[string]streamMap
 type streamMap map[string]*stream
+type HandlerFunc func(ctx context.Context)
+type HandlersChain []HandlerFunc
 
 type stream struct {
 	ctx    context.Context
@@ -24,6 +26,9 @@ type kenService struct {
 	ctx     context.Context
 	domains map[string]appMap
 
+	play    HandlersChain
+	publish HandlersChain
+
 	mu sync.RWMutex
 }
 
@@ -32,19 +37,27 @@ func ServiceHandler(ctx context.Context) *kenService {
 		if ctx == nil {
 			ctx = context.Background()
 		}
-		ps = &kenService{
+		ks = &kenService{
 			ctx:     context.Background(),
 			domains: make(map[string]appMap),
 		}
+		ks.useOnPlay(
+			blockOnPlay,
+			pullOnPlay,
+		)
+		ks.useOnPublish(
+			blockOnPublish,
+			pushOnPublish,
+		)
 	})
-	return ps
+	return ks
 }
 
 func (ks *kenService) Ctx() context.Context {
 	return ks.ctx
 }
 
-func (ks *kenService) OnPlay(cont *types.Content) (context.Context, int) {
+func (ks *kenService) OnPlay(cont *types.Content) context.Context {
 	ks.mu.Lock()
 	am, ok := ks.domains[cont.Domain]
 	if !ok {
@@ -63,8 +76,10 @@ func (ks *kenService) OnPlay(cont *types.Content) (context.Context, int) {
 		sm[cont.Name] = s
 	}
 	ks.mu.Unlock()
-	// TODO: plugin
-	return types.NewContext(s.ctx, cont), 200
+
+	ctx := types.NewContext(s.ctx, cont)
+	// TODO: plugin/middleware
+	return ctx
 }
 
 func (ks *kenService) OnPublish(cont *types.Content) (context.Context, int) {
@@ -145,4 +160,12 @@ func (ks *kenService) CloseStream(domain, app, name string) {
 			}
 		}
 	}
+}
+
+func (ks *kenService) useOnPlay(middleware ...HandlerFunc) {
+	ks.play = append(ks.play, middleware...)
+}
+
+func (ks *kenService) useOnPublish(middleware ...HandlerFunc) {
+	ks.publish = append(ks.publish, middleware...)
 }

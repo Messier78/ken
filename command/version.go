@@ -10,7 +10,7 @@ import (
 var (
 	Version   = "unknown"
 	ChangeLog = "unknown"
-	Built = "unknown"
+	Built     = "unknown"
 )
 
 // NewVersionCommand ...
@@ -20,7 +20,7 @@ func newVersionCommand() *cobra.Command {
 		Short: "show version info",
 		Run: func(cmd *cobra.Command, args []string) {
 			fmt.Printf(`Ken
-    Author: Dwion
+    Author: Scythefly
     Version: %s
     ChangeLog: %s
     build with %s, at %s
